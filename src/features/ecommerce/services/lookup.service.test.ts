@@ -29,6 +29,7 @@ const CFG: WcWorkspaceConfig = {
   consumerSecret: "cs_real",
   extraStopwords: [],
   statusMessages: null,
+  cartWebhookSecret: null,
 };
 
 const CTX = { workspaceId: "ws1", conversationId: "conv1" };

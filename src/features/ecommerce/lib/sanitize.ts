@@ -16,3 +16,41 @@ export function sanitizeText(value: string, maxLength: number): string {
     .trim()
     .slice(0, maxLength);
 }
+
+const MAX_NAME_LENGTH = 120;
+const MAX_SKU_LENGTH = 64;
+
+/** Ítem de carrito ya sanitizado, listo para persistir como JSONB. */
+export interface CartItem {
+  name: string;
+  qty: number;
+  price: number;
+  sku?: string;
+  url?: string;
+}
+
+/**
+ * Normaliza los ítems del webhook de carritos a `CartItem[]` sanitizados.
+ * Los nombres de producto terminan incrustados en mensajes que procesa el
+ * LLM — se tratan SIEMPRE como dato, nunca como instrucción.
+ */
+export function sanitizeCartItems(
+  items: Array<{
+    name: string;
+    qty: number;
+    price: number;
+    sku?: string;
+    url?: string;
+  }>,
+): CartItem[] {
+  return items.map((item) => {
+    const clean: CartItem = {
+      name: sanitizeText(item.name, MAX_NAME_LENGTH),
+      qty: item.qty,
+      price: item.price,
+    };
+    if (item.sku) clean.sku = sanitizeText(item.sku, MAX_SKU_LENGTH);
+    if (item.url) clean.url = item.url;
+    return clean;
+  });
+}

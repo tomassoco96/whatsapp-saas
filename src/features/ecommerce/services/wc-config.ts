@@ -14,7 +14,8 @@ function svc() {
  *
  * credentials: { wc_consumer_key, wc_consumer_secret }  → solo para PEDIDOS
  *              (REST v3 autenticada). El catálogo usa la Store API pública.
- * config:      { store_url, search_stopwords?, status_messages? }
+ * config:      { store_url, search_stopwords?, status_messages?,
+ *                cart_webhook_secret? }
  */
 export interface WcWorkspaceConfig {
   /** URL base de la tienda, sin barra final. Siempre https. */
@@ -25,6 +26,8 @@ export interface WcWorkspaceConfig {
   extraStopwords: string[];
   /** Mensajes de estado custom que pisan/extienden el mapa default. */
   statusMessages: Record<string, StatusMessage> | null;
+  /** Secret del webhook de carritos abandonados (header X-Webhook-Secret). */
+  cartWebhookSecret: string | null;
 }
 
 /** True cuando hay credenciales REST v3 para consultar pedidos. */
@@ -86,5 +89,10 @@ export async function getWcConfig(
         : null,
     extraStopwords,
     statusMessages,
+    cartWebhookSecret:
+      typeof config.cart_webhook_secret === "string" &&
+      config.cart_webhook_secret.length > 0
+        ? config.cart_webhook_secret
+        : null,
   };
 }

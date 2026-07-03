@@ -35,6 +35,7 @@ const CFG: WcWorkspaceConfig = {
   consumerSecret: "cs",
   extraStopwords: [],
   statusMessages: null,
+  cartWebhookSecret: null,
 };
 
 function product(over: Partial<WooProduct> = {}): WooProduct {
