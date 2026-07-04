@@ -25,6 +25,8 @@ const CHAIN_METHODS = [
   "delete",
   "eq",
   "neq",
+  "in",
+  "not",
   "gte",
   "lte",
   "filter",
