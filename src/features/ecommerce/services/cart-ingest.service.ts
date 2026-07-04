@@ -1,6 +1,9 @@
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { timingSafeEqual } from "node:crypto";
-import { normalizeArgentinePhone } from "../lib/phone";
+import {
+  normalizeArgentinePhone,
+  normalizeInternationalPhone,
+} from "../lib/phone";
 import { sanitizeCartItems } from "../lib/sanitize";
 import type { AbandonedCartWebhook } from "../schemas/cart";
 
@@ -53,21 +56,39 @@ export async function ingestAbandonedCart(
   input: AbandonedCartWebhook,
 ): Promise<IngestCartResult> {
   const supabase = svc();
-  const phone = normalizeArgentinePhone(input.phone);
+  // AR primero (heurística de nacionales de 10 dígitos), fallback
+  // internacional para números que ya traen código de país (+52, +55, etc.)
+  const phone =
+    normalizeArgentinePhone(input.phone) ??
+    normalizeInternationalPhone(input.phone);
   const items = sanitizeCartItems(input.items);
 
   // ── Dedupe fuerte por external_id ─────────────────────────────────────────
   if (input.external_id) {
     const { data: existing } = await supabase
       .from("abandoned_carts")
-      .select("id")
+      .select("id, status")
       .eq("workspace_id", workspaceId)
       .eq("external_id", input.external_id)
       .maybeSingle();
 
     if (existing) {
+      const ex = existing as { id: string; status: string };
+      // Los plugins re-postean el mismo carrito cuando cambia (más ítems,
+      // otro total): refrescamos el contenido mientras nadie fue contactado.
+      if (ex.status === "pending" || ex.status === "not_contactable") {
+        await supabase
+          .from("abandoned_carts")
+          .update({
+            items,
+            total: input.total,
+            checkout_url: input.checkout_url ?? null,
+            abandoned_at: new Date(input.abandoned_at).toISOString(),
+          })
+          .eq("id", ex.id);
+      }
       return {
-        cartId: (existing as { id: string }).id,
+        cartId: ex.id,
         deduped: true,
         contactable: phone !== null,
       };

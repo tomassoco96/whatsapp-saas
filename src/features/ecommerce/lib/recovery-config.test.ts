@@ -20,8 +20,8 @@ const BASE_CONFIG = {
 function cfg(over: Partial<RecoveryConfig> = {}): RecoveryConfig {
   return {
     touches: [
-      { templateName: "carrito_1", delayHours: 1 },
-      { templateName: "carrito_2", delayHours: 24 },
+      { templateName: "carrito_1", delayHours: 1, templateLanguage: "es" },
+      { templateName: "carrito_2", delayHours: 24, templateLanguage: "es" },
     ],
     quietStart: null,
     quietEnd: null,
@@ -43,7 +43,11 @@ describe("parseRecoveryConfig", () => {
     });
     expect(r).not.toBeNull();
     expect(r!.touches).toHaveLength(2);
-    expect(r!.touches[0]).toEqual({ templateName: "carrito_1", delayHours: 1 });
+    expect(r!.touches[0]).toEqual({
+      templateName: "carrito_1",
+      delayHours: 1,
+      templateLanguage: "es",
+    });
     expect(r!.quietStart).toBe("21:00");
     expect(r!.timezone).toBe("America/Mexico_City");
     expect(r!.expireHours).toBe(48);
@@ -75,7 +79,23 @@ describe("parseRecoveryConfig", () => {
         ],
       },
     });
-    expect(r!.touches).toEqual([{ templateName: "valido", delayHours: 2 }]);
+    expect(r!.touches).toEqual([
+      { templateName: "valido", delayHours: 2, templateLanguage: "es" },
+    ]);
+  });
+
+  it("respeta template_language por toque (es_AR/es_MX) con default es", () => {
+    const r = parseRecoveryConfig({
+      recovery: {
+        enabled: true,
+        touches: [
+          { template_name: "t1", delay_hours: 1, template_language: "es_AR" },
+          { template_name: "t2", delay_hours: 24 },
+        ],
+      },
+    });
+    expect(r!.touches[0].templateLanguage).toBe("es_AR");
+    expect(r!.touches[1].templateLanguage).toBe("es");
   });
 
   it("quiet hours con formato inválido se descartan", () => {

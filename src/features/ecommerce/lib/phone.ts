@@ -52,6 +52,25 @@ export function normalizeArgentinePhone(
 }
 
 /**
+ * Normalización internacional conservadora, para carritos de tiendas fuera de
+ * AR (whatsapp-saas nació multi-país): acepta números que YA traen código de
+ * país — con '+' explícito, o sin '+' pero con largo de internacional (11-15
+ * dígitos). Un nacional pelado de 10 dígitos sin '+' NO se puede atribuir a
+ * un país acá; ese caso lo resuelve normalizeArgentinePhone (heurística AR)
+ * antes de llegar a este fallback.
+ */
+export function normalizeInternationalPhone(
+  input: string | null | undefined,
+): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) return null;
+  if (trimmed.startsWith("+")) return `+${digits}`;
+  return digits.length >= 11 ? `+${digits}` : null;
+}
+
+/**
  * Variantes de búsqueda para el `search` de WooCommerce, en orden de probabilidad.
  *
  * WooCommerce guarda el teléfono tal cual lo tipeó el cliente en el checkout —

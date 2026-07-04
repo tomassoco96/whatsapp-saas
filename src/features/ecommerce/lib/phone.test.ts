@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   normalizeArgentinePhone,
+  normalizeInternationalPhone,
   argentinePhoneSearchVariants,
 } from "./phone";
 
@@ -19,6 +20,31 @@ describe("normalizeArgentinePhone", () => {
     expect(normalizeArgentinePhone(null)).toBeNull();
     expect(normalizeArgentinePhone("123")).toBeNull();
     expect(normalizeArgentinePhone("12345678901234")).toBeNull();
+  });
+});
+
+describe("normalizeInternationalPhone", () => {
+  it("acepta E.164 con '+' de cualquier país", () => {
+    expect(normalizeInternationalPhone("+52 1 55 1234 5678")).toBe(
+      "+5215512345678",
+    );
+    expect(normalizeInternationalPhone("+55 11 91234-5678")).toBe(
+      "+5511912345678",
+    );
+  });
+
+  it("sin '+' solo acepta largos de internacional (11-15 dígitos)", () => {
+    expect(normalizeInternationalPhone("5215512345678")).toBe(
+      "+5215512345678",
+    );
+    // un nacional pelado de 10 dígitos es ambiguo: no se le inventa país
+    expect(normalizeInternationalPhone("5512345678")).toBeNull();
+  });
+
+  it("rechaza inputs cortos, larguísimos o vacíos", () => {
+    expect(normalizeInternationalPhone("+123")).toBeNull();
+    expect(normalizeInternationalPhone("1234567890123456")).toBeNull();
+    expect(normalizeInternationalPhone(null)).toBeNull();
   });
 });
 

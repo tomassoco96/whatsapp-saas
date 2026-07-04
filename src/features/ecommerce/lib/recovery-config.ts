@@ -5,8 +5,9 @@
  * config.recovery = {
  *   enabled: boolean,                  // false por default: activación CONSCIENTE
  *   touches: [                         // secuencia de toques (plantillas Meta
- *     { template_name, delay_hours },  //   aprobadas: bypasean la ventana 24h)
- *     ...
+ *     { template_name, delay_hours,    //   aprobadas: bypasean la ventana 24h)
+ *       template_language? },          // default "es"; Meta suele registrar
+ *     ...                              //   es_AR / es_MX — usar el exacto
  *   ],
  *   quiet_hours: { start: "21:00", end: "09:00" },  // opcional
  *   timezone: "America/Argentina/Buenos_Aires",     // para quiet hours
@@ -17,6 +18,7 @@
 export interface RecoveryTouch {
   templateName: string;
   delayHours: number;
+  templateLanguage: string;
 }
 
 export interface RecoveryConfig {
@@ -49,8 +51,16 @@ export function parseRecoveryConfig(
     const name =
       typeof tt.template_name === "string" ? tt.template_name.trim() : "";
     const delay = Number(tt.delay_hours);
+    const language =
+      typeof tt.template_language === "string" && tt.template_language.trim()
+        ? tt.template_language.trim()
+        : "es";
     if (name && Number.isFinite(delay) && delay >= 0) {
-      touches.push({ templateName: name, delayHours: delay });
+      touches.push({
+        templateName: name,
+        delayHours: delay,
+        templateLanguage: language,
+      });
     }
   }
   if (touches.length === 0) return null;

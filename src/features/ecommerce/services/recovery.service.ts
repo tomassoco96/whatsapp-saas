@@ -247,7 +247,7 @@ async function processCart(
     workspaceId: cart.workspace_id,
     conversationId: ensured.conversationId,
     templateName: touch.templateName,
-    templateLanguage: "es",
+    templateLanguage: touch.templateLanguage,
   });
 
   if (sent.ok) {

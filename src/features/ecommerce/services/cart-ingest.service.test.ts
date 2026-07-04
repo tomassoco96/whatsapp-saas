@@ -105,7 +105,7 @@ describe("ingestAbandonedCart", () => {
   });
 
   it("dedupe fuerte: external_id ya ingresado devuelve el carrito existente", async () => {
-    h.mock.queue.push({ data: { id: "cart-existente" } });
+    h.mock.queue.push({ data: { id: "cart-existente", status: "contacted" } });
 
     const r = await ingestAbandonedCart("ws1", webhookPayload());
 
@@ -115,6 +115,57 @@ describe("ingestAbandonedCart", () => {
       (c) => c.table === "abandoned_carts" && c.method === "insert",
     );
     expect(insert).toBeUndefined();
+    // contacted: NO se refresca el contenido (ya hubo un toque sobre lo anterior)
+    const update = h.mock.calls.find(
+      (c) => c.table === "abandoned_carts" && c.method === "update",
+    );
+    expect(update).toBeUndefined();
+  });
+
+  it("dedupe fuerte sobre un pending: refresca items, total y checkout_url", async () => {
+    h.mock.queue.push(
+      { data: { id: "cart-existente", status: "pending" } },
+      { data: null }, // update de refresh
+    );
+
+    const r = await ingestAbandonedCart(
+      "ws1",
+      webhookPayload({
+        total: 20000,
+        items: [{ name: "Pijama", qty: 2, price: 10000 }],
+      }),
+    );
+
+    expect(r.deduped).toBe(true);
+    const update = h.mock.calls.find(
+      (c) => c.table === "abandoned_carts" && c.method === "update",
+    );
+    expect(update).toBeDefined();
+    const row = update!.args[0] as { total: number; items: unknown[] };
+    expect(row.total).toBe(20000);
+    expect(row.items).toHaveLength(1);
+  });
+
+  it("teléfono internacional con código de país (+52) queda contactable", async () => {
+    h.mock.queue.push(
+      { data: null }, // dedupe external_id
+      { data: null }, // contacto no existe
+      { data: { id: "cart-mx" } },
+      { data: null }, // event
+    );
+
+    const r = await ingestAbandonedCart(
+      "ws1",
+      webhookPayload({ phone: "+52 1 55 1234 5678" }),
+    );
+
+    expect(r.contactable).toBe(true);
+    const insert = h.mock.calls.find(
+      (c) => c.table === "abandoned_carts" && c.method === "insert",
+    );
+    expect((insert!.args[0] as { phone: string }).phone).toBe(
+      "+5215512345678",
+    );
   });
 
   it("dedupe blando: sin external_id, mismo teléfono con pending reciente", async () => {
