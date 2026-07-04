@@ -17,7 +17,7 @@ import { ModelPicker } from "@/features/agents/components/model-picker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Provider = "ycloud" | "openrouter" | "highlevel";
+type Provider = "ycloud" | "openrouter" | "highlevel" | "woocommerce";
 
 type IntegrationData = {
   provider: Provider;
@@ -29,6 +29,17 @@ type IntegrationData = {
   // returned unmasked by the integrations GET so the UI can show the URL).
   highlevel_webhook_secret?: string;
   highlevel_webhook_url?: string;
+  // WooCommerce-only: secret + URL del webhook de carritos abandonados
+  // (se configuran en el plugin de WordPress).
+  cart_webhook_secret?: string;
+  cart_webhook_url?: string;
+};
+
+// Un toque de la secuencia de recuperación, como lo edita la UI.
+type RecoveryTouchDraft = {
+  template_name: string;
+  delay_hours: string;
+  template_language: string;
 };
 
 // HighLevel pipeline + stages, as returned by the pipelines endpoint.
@@ -778,6 +789,422 @@ function HighLevelSection({
   );
 }
 
+// ─── WooCommerce section ──────────────────────────────────────────────────────
+
+function WooCommerceSection({
+  workspaceId,
+  initial,
+  onSaved,
+}: {
+  workspaceId: string;
+  initial: IntegrationData | undefined;
+  onSaved: () => void;
+}) {
+  const initialRecovery =
+    (initial?.config?.recovery as Record<string, unknown> | undefined) ?? {};
+  const initialTouches = Array.isArray(initialRecovery.touches)
+    ? (initialRecovery.touches as Array<Record<string, unknown>>).map((t) => ({
+        template_name: String(t.template_name ?? ""),
+        delay_hours: String(t.delay_hours ?? ""),
+        template_language: String(t.template_language ?? "es"),
+      }))
+    : [];
+  const initialQuiet =
+    (initialRecovery.quiet_hours as Record<string, unknown> | undefined) ?? {};
+
+  const [storeUrl, setStoreUrl] = useState(
+    (initial?.config?.store_url as string | undefined) ?? "",
+  );
+  const [consumerKey, setConsumerKey] = useState(
+    initial?.credentials?.wc_consumer_key ?? "",
+  );
+  const [consumerSecret, setConsumerSecret] = useState(
+    initial?.credentials?.wc_consumer_secret ?? "",
+  );
+  const [recoveryEnabled, setRecoveryEnabled] = useState(
+    initialRecovery.enabled === true,
+  );
+  const [touches, setTouches] = useState<RecoveryTouchDraft[]>(initialTouches);
+  const [quietStart, setQuietStart] = useState(
+    typeof initialQuiet.start === "string" ? initialQuiet.start : "",
+  );
+  const [quietEnd, setQuietEnd] = useState(
+    typeof initialQuiet.end === "string" ? initialQuiet.end : "",
+  );
+  const [timezone, setTimezone] = useState(
+    (initialRecovery.timezone as string | undefined) ??
+      "America/Argentina/Buenos_Aires",
+  );
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const webhookUrl =
+    initial?.cart_webhook_url ??
+    (typeof window !== "undefined"
+      ? `${window.location.origin}/api/webhooks/cart-abandoned/${workspaceId}`
+      : `/api/webhooks/cart-abandoned/${workspaceId}`);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(webhookUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  function updateTouch(
+    index: number,
+    field: keyof RecoveryTouchDraft,
+    value: string,
+  ) {
+    setTouches((prev) =>
+      prev.map((t, i) => (i === index ? { ...t, [field]: value } : t)),
+    );
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    try {
+      const res = await fetch(
+        `/api/workspace/${workspaceId}/integrations/woocommerce/test`,
+        { method: "POST" },
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        storeOk?: boolean;
+        ordersOk?: boolean | null;
+        error?: string;
+      };
+      if (json.ok) {
+        const ordersMsg =
+          json.ordersOk === null
+            ? " (pedidos sin probar: faltan las consumer keys)"
+            : " — catálogo y pedidos OK";
+        toast.success(`WooCommerce conectado${ordersMsg}`);
+      } else {
+        toast.error(json.error ?? "No se pudo conectar con la tienda");
+      }
+    } catch {
+      toast.error("Error de red al probar la conexión");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSave() {
+    if (recoveryEnabled && touches.every((t) => !t.template_name.trim())) {
+      toast.error(
+        "Para activar la recuperación agregá al menos un toque con su template",
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const cleanTouches = touches
+        .filter((t) => t.template_name.trim())
+        .map((t) => ({
+          template_name: t.template_name.trim(),
+          delay_hours: Number(t.delay_hours) || 0,
+          template_language: t.template_language.trim() || "es",
+        }));
+
+      const res = await fetch(`/api/workspace/${workspaceId}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "woocommerce",
+          credentials: {
+            wc_consumer_key: consumerKey,
+            wc_consumer_secret: consumerSecret,
+          },
+          config: {
+            store_url: storeUrl.trim().replace(/\/$/, ""),
+            recovery: {
+              enabled: recoveryEnabled,
+              touches: cleanTouches,
+              quiet_hours:
+                quietStart && quietEnd
+                  ? { start: quietStart, end: quietEnd }
+                  : undefined,
+              timezone,
+            },
+          },
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (json.ok) {
+        toast.success("Configuración de WooCommerce guardada");
+        onSaved();
+      } else {
+        toast.error(json.error ?? "Error al guardar");
+      }
+    } catch {
+      toast.error("Error de red al guardar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section
+      title="WooCommerce (e-commerce)"
+      description="Catálogo, estado de pedidos y recuperación de carritos abandonados de la tienda."
+    >
+      <div className="grid gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="wc-store-url">URL de la tienda (https)</Label>
+          <Input
+            id="wc-store-url"
+            type="url"
+            placeholder="https://mitienda.com"
+            value={storeUrl}
+            onChange={(e) => setStoreUrl(e.target.value)}
+          />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="wc-consumer-key">Consumer Key (REST v3)</Label>
+            <Input
+              id="wc-consumer-key"
+              type="password"
+              placeholder="ck_..."
+              value={consumerKey}
+              onChange={(e) => setConsumerKey(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="wc-consumer-secret">Consumer Secret</Label>
+            <Input
+              id="wc-consumer-secret"
+              type="password"
+              placeholder="cs_..."
+              value={consumerSecret}
+              onChange={(e) => setConsumerSecret(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Solo lectura de pedidos. El catálogo usa la Store API pública, sin
+          credenciales. Recordá habilitar las tools{" "}
+          <span className="font-mono">buscar_producto</span> y{" "}
+          <span className="font-mono">estado_pedido</span> en la pestaña Tools.
+        </p>
+
+        <div className="space-y-2">
+          <Label>Webhook de carritos abandonados (plugin de WordPress)</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={webhookUrl}
+              className="font-mono text-xs text-muted-foreground"
+              aria-label="URL del webhook de carritos (solo lectura)"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCopy}
+              aria-label="Copiar URL del webhook"
+            >
+              {copied ? (
+                <CheckCircle2 className="h-4 w-4" aria-hidden />
+              ) : (
+                <Copy className="h-4 w-4" aria-hidden />
+              )}
+            </Button>
+          </div>
+          {initial?.cart_webhook_secret ? (
+            <p className="text-xs text-muted-foreground">
+              Header <span className="font-mono">X-Webhook-Secret</span>:{" "}
+              <span className="font-mono">{initial.cart_webhook_secret}</span>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              El secret del header se genera al guardar por primera vez.
+            </p>
+          )}
+        </div>
+
+        <Separator />
+
+        <div className="flex items-center gap-3">
+          <input
+            id="wc-recovery-enabled"
+            type="checkbox"
+            checked={recoveryEnabled}
+            onChange={(e) => setRecoveryEnabled(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          <div>
+            <Label htmlFor="wc-recovery-enabled">
+              Recuperación de carritos activa
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Activar SOLO con el OK del dueño del negocio: se contacta a
+              clientes reales. Los carritos se ingieren igual con esto apagado.
+            </p>
+          </div>
+        </div>
+
+        {recoveryEnabled && (
+          <div className="space-y-4 rounded-lg border border-border/50 p-4">
+            <div className="space-y-3">
+              <Label>Secuencia de toques (templates Meta aprobados)</Label>
+              {touches.map((touch, i) => (
+                <div key={i} className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    {i === 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        Template
+                      </span>
+                    )}
+                    <Input
+                      placeholder="carrito_recordatorio_1"
+                      value={touch.template_name}
+                      onChange={(e) =>
+                        updateTouch(i, "template_name", e.target.value)
+                      }
+                      aria-label={`Template del toque ${i + 1}`}
+                    />
+                  </div>
+                  <div className="w-24 space-y-1">
+                    {i === 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        Delay (hs)
+                      </span>
+                    )}
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="1"
+                      value={touch.delay_hours}
+                      onChange={(e) =>
+                        updateTouch(i, "delay_hours", e.target.value)
+                      }
+                      aria-label={`Delay en horas del toque ${i + 1}`}
+                    />
+                  </div>
+                  <div className="w-24 space-y-1">
+                    {i === 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        Idioma
+                      </span>
+                    )}
+                    <Input
+                      placeholder="es_AR"
+                      value={touch.template_language}
+                      onChange={(e) =>
+                        updateTouch(i, "template_language", e.target.value)
+                      }
+                      aria-label={`Idioma del template del toque ${i + 1}`}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setTouches((prev) => prev.filter((_, j) => j !== i))
+                    }
+                    aria-label={`Quitar toque ${i + 1}`}
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ))}
+              {touches.length < 5 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setTouches((prev) => [
+                      ...prev,
+                      {
+                        template_name: "",
+                        delay_hours: prev.length === 0 ? "1" : "24",
+                        template_language: "es",
+                      },
+                    ])
+                  }
+                >
+                  + Agregar toque
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">
+                El primer delay cuenta desde el abandono; los siguientes, desde
+                el toque anterior. El idioma debe coincidir EXACTO con el del
+                template aprobado en Meta (es, es_AR, es_MX...).
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="wc-quiet-start">No molestar desde</Label>
+                <Input
+                  id="wc-quiet-start"
+                  type="time"
+                  value={quietStart}
+                  onChange={(e) => setQuietStart(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="wc-quiet-end">hasta</Label>
+                <Input
+                  id="wc-quiet-end"
+                  type="time"
+                  value={quietEnd}
+                  onChange={(e) => setQuietEnd(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="wc-timezone">Zona horaria</Label>
+                <Input
+                  id="wc-timezone"
+                  placeholder="America/Argentina/Buenos_Aires"
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={testing}
+            aria-busy={testing}
+          >
+            {testing && (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden />
+            )}
+            Probar conexión
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            disabled={saving}
+            aria-busy={saving}
+          >
+            {saving && (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden />
+            )}
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -803,6 +1230,7 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
   const ycloud = findIntegration(integrations, "ycloud");
   const openrouter = findIntegration(integrations, "openrouter");
   const highlevel = findIntegration(integrations, "highlevel");
+  const woocommerce = findIntegration(integrations, "woocommerce");
 
   return (
     <div className="space-y-6">
@@ -821,6 +1249,12 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
       <HighLevelSection
         workspaceId={workspaceId}
         initial={highlevel}
+        onSaved={refresh}
+      />
+      <Separator />
+      <WooCommerceSection
+        workspaceId={workspaceId}
+        initial={woocommerce}
         onSaved={refresh}
       />
     </div>

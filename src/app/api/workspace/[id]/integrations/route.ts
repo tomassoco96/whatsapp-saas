@@ -8,7 +8,7 @@ import {
 } from "@/lib/auth/workspace-access";
 
 const IntegrationSchema = z.object({
-  provider: z.enum(["ycloud", "openrouter", "highlevel"]),
+  provider: z.enum(["ycloud", "openrouter", "highlevel", "woocommerce"]),
   enabled: z.boolean().optional(),
   credentials: z.record(z.string(), z.string()).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
@@ -81,6 +81,21 @@ export async function GET(
       };
     }
 
+    // El secret del webhook de carritos es de baja sensibilidad (solo autoriza
+    // ingesta de carritos): se expone junto a la URL para que la UI muestre
+    // qué configurar en el plugin de WordPress.
+    if (row.provider === "woocommerce") {
+      const secret =
+        typeof row.config?.cart_webhook_secret === "string"
+          ? row.config.cart_webhook_secret
+          : "";
+      return {
+        ...base,
+        cart_webhook_secret: secret,
+        cart_webhook_url: `${appUrl}/api/webhooks/cart-abandoned/${workspaceId}`,
+      };
+    }
+
     return base;
   });
 
@@ -138,10 +153,19 @@ export async function PUT(
   ) {
     mergedCreds.highlevel_webhook_secret = randomBytes(24).toString("hex");
   }
-  const mergedConfig = {
+  const mergedConfig: Record<string, unknown> = {
     ...((existing?.config as object) ?? {}),
     ...(parsed.data.config ?? {}),
   };
+
+  // WooCommerce: secret estable del webhook de carritos en el primer guardado
+  // (nunca se pisa uno existente — la URL configurada en el plugin sigue válida).
+  if (
+    parsed.data.provider === "woocommerce" &&
+    typeof mergedConfig.cart_webhook_secret !== "string"
+  ) {
+    mergedConfig.cart_webhook_secret = randomBytes(24).toString("hex");
+  }
 
   const { error } = await svc.from("integrations").upsert(
     {

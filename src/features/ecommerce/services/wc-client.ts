@@ -240,6 +240,52 @@ export async function searchCategoriesByName(
     .map(toWooCategory);
 }
 
+/**
+ * Chequeo de salud (portado del v1): pide 1 producto a la Store API pública
+ * y, si hay credenciales REST, 1 orden a la API autenticada. No lanza:
+ * cualquier fallo se reporta como ok:false con el detalle.
+ */
+export async function pingWooCommerce(cfg: WcWorkspaceConfig): Promise<{
+  ok: boolean;
+  storeOk: boolean;
+  ordersOk: boolean | null; // null = sin credenciales para probar
+  latencyMs: number | null;
+  error?: string;
+}> {
+  const start = Date.now();
+  let storeOk = false;
+  let ordersOk: boolean | null = null;
+  let error: string | undefined;
+
+  try {
+    await storeFetch(cfg, `/products?per_page=1`, 5000);
+    storeOk = true;
+  } catch (e) {
+    error = e instanceof Error ? e.message : "error desconocido (Store API)";
+  }
+
+  if (cfg.consumerKey && cfg.consumerSecret) {
+    try {
+      await wcFetch(cfg, `/orders?per_page=1`, 5000);
+      ordersOk = true;
+    } catch (e) {
+      ordersOk = false;
+      error =
+        error ??
+        (e instanceof Error ? e.message : "error desconocido (REST v3)");
+    }
+  }
+
+  const ok = storeOk && ordersOk !== false;
+  return {
+    ok,
+    storeOk,
+    ordersOk,
+    latencyMs: ok ? Date.now() - start : null,
+    ...(error && !ok ? { error } : {}),
+  };
+}
+
 /** Productos de una categoría por su id. */
 export async function getProductsByCategoryId(
   cfg: WcWorkspaceConfig,
