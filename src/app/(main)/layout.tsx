@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Building2,
+  FileText,
   LayoutDashboard,
   LogOut,
   MessageCircle,
@@ -140,6 +141,17 @@ export default async function MainLayout({
             </Button>
           </Link>
 
+          <Link href="/reportes">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <FileText className="h-4 w-4" aria-hidden="true" />
+              <span className="sr-only sm:not-sr-only sm:ml-2">Reportes</span>
+            </Button>
+          </Link>
+
           <Link href="/settings">
             <Button
               variant="ghost"
@@ -198,6 +210,14 @@ export default async function MainLayout({
         >
           <ShoppingCart className="h-5 w-5" aria-hidden="true" />
           <span>Carritos</span>
+        </Link>
+
+        <Link
+          href="/reportes"
+          className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground hover:text-primary transition-colors"
+        >
+          <FileText className="h-5 w-5" aria-hidden="true" />
+          <span>Reportes</span>
         </Link>
 
         <Link

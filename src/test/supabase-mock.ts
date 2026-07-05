@@ -28,6 +28,7 @@ const CHAIN_METHODS = [
   "in",
   "not",
   "gte",
+  "lt",
   "lte",
   "filter",
   "order",
