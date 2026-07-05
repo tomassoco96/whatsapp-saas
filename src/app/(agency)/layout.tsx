@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
-import { Building2, LogOut, Settings } from "lucide-react";
+import { Building2, LayoutDashboard, LogOut, Settings } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { logout } from "@/features/auth/services/actions";
@@ -81,6 +81,18 @@ export default async function AgencyLayout({
         aria-label="Navegación de agencia"
       >
         <div className="flex items-center gap-0.5 h-10">
+          <Link
+            href="/panel"
+            className={cn(
+              "flex items-center gap-1.5 px-3 h-full",
+              "text-sm text-muted-foreground hover:text-foreground",
+              "border-b-2 border-transparent hover:border-border",
+              "transition-colors duration-150",
+            )}
+          >
+            <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
+            Panel
+          </Link>
           <Link
             href="/workspaces"
             className={cn(
