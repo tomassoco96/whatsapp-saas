@@ -96,7 +96,7 @@ export default async function MainLayout({
           <ThemeToggle />
 
           {isSuperAdmin && (
-            <Link href="/workspaces">
+            <Link href="/panel">
               <Button
                 variant="ghost"
                 size="sm"
@@ -230,7 +230,7 @@ export default async function MainLayout({
 
         {isSuperAdmin && (
           <Link
-            href="/workspaces"
+            href="/panel"
             className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground hover:text-primary transition-colors"
           >
             <Building2 className="h-5 w-5" aria-hidden="true" />
