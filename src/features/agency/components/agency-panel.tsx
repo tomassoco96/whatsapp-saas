@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Building2,
   MessageCircle,
   DollarSign,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 import type {
   AgencyRollup,
   Period,
+  WorkspaceOpenAlerts,
   WorkspacePeriodStats,
 } from "../services/agency-metrics";
 
@@ -102,12 +104,29 @@ function KpiCard({ label, value, icon, accent = false }: KpiCardProps) {
   );
 }
 
-// --- salud básica: punto de color según antigüedad del último mensaje ---
+// --- salud: alertas abiertas primero (rojo/ámbar), si no, antigüedad del
+// --- último mensaje ---
 
-function healthInfo(lastActivityAt: string | null): {
+function healthInfo(
+  lastActivityAt: string | null,
+  openAlerts?: WorkspaceOpenAlerts,
+): {
   color: string;
   label: string;
 } {
+  // Las alertas abiertas del health-check pisan la señal de actividad:
+  // critical (rojo) > warning (ámbar). El detalle va al title/tooltip.
+  if (openAlerts && (openAlerts.critical > 0 || openAlerts.warning > 0)) {
+    const total = openAlerts.critical + openAlerts.warning;
+    const detail =
+      openAlerts.messages.length > 0
+        ? openAlerts.messages.join(" · ")
+        : `${total} alerta(s) de salud abierta(s)`;
+    return {
+      color: openAlerts.critical > 0 ? "bg-destructive" : "bg-warning",
+      label: detail,
+    };
+  }
   if (!lastActivityAt) {
     return { color: "bg-muted-foreground/40", label: "Sin actividad" };
   }
@@ -124,8 +143,14 @@ function healthInfo(lastActivityAt: string | null): {
   };
 }
 
-function HealthDot({ lastActivityAt }: { lastActivityAt: string | null }) {
-  const { color, label } = healthInfo(lastActivityAt);
+function HealthDot({
+  lastActivityAt,
+  openAlerts,
+}: {
+  lastActivityAt: string | null;
+  openAlerts?: WorkspaceOpenAlerts;
+}) {
+  const { color, label } = healthInfo(lastActivityAt, openAlerts);
 
   return (
     <span className="flex items-center gap-2">
@@ -210,7 +235,7 @@ export function AgencyPanel({ rollup, period }: Props) {
       </div>
 
       {/* KPIs consolidados del período */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <KpiCard
           label="Workspaces activos"
           value={`${totals.activeWorkspaces}/${totals.workspaces}`}
@@ -231,6 +256,11 @@ export function AgencyPanel({ rollup, period }: Props) {
           label="Gasto LLM"
           value={formatCost(totals.llmCostUsd)}
           icon={<Cpu className="h-4 w-4" aria-hidden="true" />}
+        />
+        <KpiCard
+          label="Alertas abiertas"
+          value={totals.openAlerts.toLocaleString("es-AR")}
+          icon={<AlertTriangle className="h-4 w-4" aria-hidden="true" />}
         />
       </div>
 
@@ -365,7 +395,10 @@ export function AgencyPanel({ rollup, period }: Props) {
               <span className="text-xs text-muted-foreground md:hidden">
                 Actividad:
               </span>
-              <HealthDot lastActivityAt={row.lastActivityAt} />
+              <HealthDot
+                lastActivityAt={row.lastActivityAt}
+                openAlerts={row.openAlerts}
+              />
             </div>
 
             {/* Acción: entrar al workspace */}

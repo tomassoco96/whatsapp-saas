@@ -64,6 +64,7 @@ export default async function AgencyPanelPage({ searchParams }: PageProps) {
               conversations: 0,
               recoveredValue: 0,
               llmCostUsd: 0,
+              openAlerts: 0,
             },
             rows: [],
           }
