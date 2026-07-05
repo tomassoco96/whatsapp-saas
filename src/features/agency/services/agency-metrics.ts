@@ -89,6 +89,13 @@ export interface AgencyAgentRow {
   workspace_id: string;
 }
 
+/** Alerta ABIERTA (resolved_at null) de workspace_alerts. */
+export interface AgencyAlertRow {
+  workspace_id: string;
+  severity: string;
+  message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Resultado agregado
 // ---------------------------------------------------------------------------
@@ -109,6 +116,15 @@ export interface WorkspacePeriodStats {
   activeAgents: number;
   /** Último mensaje en cualquier conversación del workspace (salud básica). */
   lastActivityAt: string | null;
+  /** Alertas de salud abiertas (workspace_alerts con resolved_at null). */
+  openAlerts: WorkspaceOpenAlerts;
+}
+
+export interface WorkspaceOpenAlerts {
+  critical: number;
+  warning: number;
+  /** Mensajes de las alertas abiertas (para tooltip), críticas primero. */
+  messages: string[];
 }
 
 export interface AgencyRollup {
@@ -119,6 +135,8 @@ export interface AgencyRollup {
     conversations: number;
     recoveredValue: number;
     llmCostUsd: number;
+    /** Total de alertas de salud abiertas en todos los workspaces. */
+    openAlerts: number;
   };
   rows: WorkspacePeriodStats[];
 }
@@ -129,6 +147,8 @@ interface AggregateInput {
   carts: AgencyCartRow[];
   llmEvents: AgencyLlmEventRow[];
   agents: AgencyAgentRow[];
+  /** Opcional para no romper llamadas existentes (default: sin alertas). */
+  alerts?: AgencyAlertRow[];
   period: Pick<Period, "start" | "end">;
 }
 
@@ -157,7 +177,20 @@ export function aggregateAgencyRollup(input: AggregateInput): AgencyRollup {
       llmCostUsd: 0,
       activeAgents: 0,
       lastActivityAt: null,
+      openAlerts: { critical: 0, warning: 0, messages: [] },
     });
+  }
+
+  // Alertas de salud abiertas (críticas primero en los mensajes del tooltip).
+  const sortedAlerts = [...(input.alerts ?? [])].sort((a, b) =>
+    a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1,
+  );
+  for (const alert of sortedAlerts) {
+    const row = rowsById.get(alert.workspace_id);
+    if (!row) continue;
+    if (alert.severity === "critical") row.openAlerts.critical++;
+    else row.openAlerts.warning++;
+    if (alert.message) row.openAlerts.messages.push(alert.message);
   }
 
   for (const c of input.conversations) {
@@ -227,6 +260,10 @@ export function aggregateAgencyRollup(input: AggregateInput): AgencyRollup {
       conversations: rows.reduce((sum, r) => sum + r.conversations, 0),
       recoveredValue: rows.reduce((sum, r) => sum + r.recoveredValue, 0),
       llmCostUsd: rows.reduce((sum, r) => sum + r.llmCostUsd, 0),
+      openAlerts: rows.reduce(
+        (sum, r) => sum + r.openAlerts.critical + r.openAlerts.warning,
+        0,
+      ),
     },
     rows,
   };
@@ -319,7 +356,8 @@ export async function getAgencyRollup(
 
   // Nota: conversations se trae sin filtro de fecha porque también alimenta
   // la señal de salud (último mensaje); el filtro de período se hace en JS.
-  const [convRes, cartsRes, eventsRes, agentsRes] = await Promise.all([
+  const [convRes, cartsRes, eventsRes, agentsRes, alertsRes] =
+    await Promise.all([
     supabase
       .from("conversations")
       .select("workspace_id, state, last_message_at")
@@ -342,12 +380,23 @@ export async function getAgencyRollup(
       .select("workspace_id")
       .eq("is_active", true)
       .in("workspace_id", ids),
+    supabase
+      .from("workspace_alerts")
+      .select("workspace_id, severity, message")
+      .filter("resolved_at", "is", null)
+      .in("workspace_id", ids),
   ]);
 
   const failed = [convRes, cartsRes, eventsRes, agentsRes].find(
     (r) => r.error,
   );
   if (failed?.error) return { error: failed.error.message };
+
+  // Las alertas de salud son señal secundaria: si su query falla (ej. la
+  // migración workspace_alerts no está aplicada) el panel sigue funcionando.
+  const alerts = alertsRes.error
+    ? []
+    : ((alertsRes.data as AgencyAlertRow[] | null) ?? []);
 
   return {
     rollup: aggregateAgencyRollup({
@@ -357,6 +406,7 @@ export async function getAgencyRollup(
       carts: (cartsRes.data as AgencyCartRow[] | null) ?? [],
       llmEvents: (eventsRes.data as AgencyLlmEventRow[] | null) ?? [],
       agents: (agentsRes.data as AgencyAgentRow[] | null) ?? [],
+      alerts,
       period,
     }),
   };

@@ -213,6 +213,48 @@ describe("aggregateAgencyRollup", () => {
 
     expect(rollup.rows.map((r) => r.id)).toEqual(["ws-3", "ws-2", "ws-1"]);
   });
+
+  it("cuenta alertas abiertas por severidad, con críticas primero en los mensajes", () => {
+    const rollup = aggregateAgencyRollup({
+      workspaces: WORKSPACES,
+      conversations: [],
+      carts: [],
+      llmEvents: [],
+      agents: [],
+      alerts: [
+        { workspace_id: "ws-a", severity: "warning", message: "silencio anómalo" },
+        { workspace_id: "ws-a", severity: "critical", message: "buffer trabado" },
+        { workspace_id: "ws-x", severity: "critical", message: "ws desconocido" },
+      ],
+      period: PERIOD,
+    });
+
+    const a = rollup.rows.find((r) => r.id === "ws-a")!;
+    expect(a.openAlerts.critical).toBe(1);
+    expect(a.openAlerts.warning).toBe(1);
+    expect(a.openAlerts.messages).toEqual(["buffer trabado", "silencio anómalo"]);
+    const b = rollup.rows.find((r) => r.id === "ws-b")!;
+    expect(b.openAlerts).toEqual({ critical: 0, warning: 0, messages: [] });
+    expect(rollup.totals.openAlerts).toBe(2);
+  });
+
+  it("sin input de alertas (opcional) queda todo en cero", () => {
+    const rollup = aggregateAgencyRollup({
+      workspaces: WORKSPACES,
+      conversations: [],
+      carts: [],
+      llmEvents: [],
+      agents: [],
+      period: PERIOD,
+    });
+
+    expect(rollup.totals.openAlerts).toBe(0);
+    expect(rollup.rows[0].openAlerts).toEqual({
+      critical: 0,
+      warning: 0,
+      messages: [],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -227,6 +269,7 @@ describe("rollupToCsv", () => {
       conversations: 10,
       recoveredValue: 2000.5,
       llmCostUsd: 1.23456,
+      openAlerts: 0,
     },
     rows: [
       {
@@ -239,6 +282,7 @@ describe("rollupToCsv", () => {
         llmCostUsd: 1.23456,
         activeAgents: 1,
         lastActivityAt: "2026-07-04T00:00:00Z",
+        openAlerts: { critical: 0, warning: 0, messages: [] },
       },
       {
         id: "ws-b",
@@ -250,6 +294,7 @@ describe("rollupToCsv", () => {
         llmCostUsd: 0,
         activeAgents: 0,
         lastActivityAt: null,
+        openAlerts: { critical: 0, warning: 0, messages: [] },
       },
     ],
   };
@@ -287,6 +332,11 @@ describe("getAgencyRollup", () => {
       { data: [{ workspace_id: "ws-a", status: "recovered", total: 300 }] }, // abandoned_carts
       { data: [{ workspace_id: "ws-a", payload: { total_tokens: 1000 } }] }, // events
       { data: [{ workspace_id: "ws-a" }] }, // agents
+      {
+        data: [
+          { workspace_id: "ws-a", severity: "critical", message: "buffer trabado" },
+        ],
+      }, // workspace_alerts abiertas
     );
 
     const result = await getAgencyRollup(PERIOD);
@@ -297,15 +347,24 @@ describe("getAgencyRollup", () => {
     expect(a.recoveredValue).toBe(300);
     expect(a.llmCostUsd).toBeCloseTo(0.002, 6);
     expect(a.activeAgents).toBe(1);
+    expect(a.openAlerts.critical).toBe(1);
     expect(result.rollup!.totals.workspaces).toBe(2);
+    expect(result.rollup!.totals.openAlerts).toBe(1);
 
-    // Se consultaron las 5 tablas esperadas
+    // Se consultaron las 6 tablas esperadas
     const tables = h.mock.calls.map((c) => c.table);
     expect(tables).toContain("workspaces");
     expect(tables).toContain("conversations");
     expect(tables).toContain("abandoned_carts");
     expect(tables).toContain("events");
     expect(tables).toContain("agents");
+    expect(tables).toContain("workspace_alerts");
+
+    // solo alertas abiertas (resolved_at null)
+    const alertsFilter = h.mock.calls.find(
+      (c) => c.table === "workspace_alerts" && c.method === "filter",
+    );
+    expect(alertsFilter?.args).toEqual(["resolved_at", "is", null]);
 
     // events filtra por type llm_usage y ventana del período
     const eventsEq = h.mock.calls.find(
@@ -349,9 +408,25 @@ describe("getAgencyRollup", () => {
       { data: [] },
       { data: [] },
       { data: [] },
+      { data: [] },
     );
 
     const result = await getAgencyRollup(PERIOD);
     expect(result.error).toBe("conv caída");
+  });
+
+  it("si falla la query de alertas el roll-up sigue (señal secundaria)", async () => {
+    h.mock.queue.push(
+      { data: WORKSPACES },
+      { data: [] }, // conversations
+      { data: [] }, // abandoned_carts
+      { data: [] }, // events
+      { data: [] }, // agents
+      { data: null, error: { message: "no existe workspace_alerts" } },
+    );
+
+    const result = await getAgencyRollup(PERIOD);
+    expect(result.error).toBeUndefined();
+    expect(result.rollup!.totals.openAlerts).toBe(0);
   });
 });
