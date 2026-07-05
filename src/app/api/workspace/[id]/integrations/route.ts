@@ -8,7 +8,14 @@ import {
 } from "@/lib/auth/workspace-access";
 
 const IntegrationSchema = z.object({
-  provider: z.enum(["ycloud", "openrouter", "highlevel", "woocommerce"]),
+  provider: z.enum([
+    "ycloud",
+    "openrouter",
+    "highlevel",
+    "woocommerce",
+    "tiendanube",
+    "shopify",
+  ]),
   enabled: z.boolean().optional(),
   credentials: z.record(z.string(), z.string()).optional(),
   config: z.record(z.string(), z.unknown()).optional(),

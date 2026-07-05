@@ -29,27 +29,23 @@ const schema = z.object({
 type Args = z.infer<typeof schema>;
 
 async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
-  const { getWcConfig, canLookupOrders } = await import(
-    "../../ecommerce/services/wc-config"
-  );
-  const { lookupOrder } = await import(
-    "../../ecommerce/services/lookup.service"
-  );
+  const { getEcommerceConnection, connectionCanLookupOrders, lookupOrderFor } =
+    await import("../../ecommerce/services/provider");
 
-  const cfg = await getWcConfig(ctx.workspaceId);
-  if (!cfg) {
-    return {
-      ok: false,
-      output: null,
-      error: "WooCommerce no está conectado para este workspace",
-    };
-  }
-  if (!canLookupOrders(cfg)) {
+  const conn = await getEcommerceConnection(ctx.workspaceId);
+  if (!conn) {
     return {
       ok: false,
       output: null,
       error:
-        "Faltan las credenciales REST de WooCommerce para consultar pedidos",
+        "No hay una tienda conectada para este workspace (WooCommerce, Tiendanube o Shopify)",
+    };
+  }
+  if (!(await connectionCanLookupOrders(conn))) {
+    return {
+      ok: false,
+      output: null,
+      error: "Faltan las credenciales de la tienda para consultar pedidos",
     };
   }
 
@@ -74,8 +70,8 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
     }
   }
 
-  const result = await lookupOrder(
-    cfg,
+  const result = await lookupOrderFor(
+    conn,
     { orderId: args.order_id, phone },
     { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId },
   );
@@ -86,7 +82,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
 export const estadoPedidoTool: Tool<Args> = {
   name: "estado_pedido",
   description:
-    "Consulta el estado REAL de un pedido en WooCommerce por número de orden o por teléfono. Úsalo SIEMPRE que el cliente pregunte por su pedido, envío o demora — nunca inventes estados. Si no da número de orden, busca solo por el teléfono de este chat.",
+    "Consulta el estado REAL de un pedido en la tienda conectada (WooCommerce, Tiendanube o Shopify) por número de orden o por teléfono. Úsalo SIEMPRE que el cliente pregunte por su pedido, envío o demora — nunca inventes estados. Si no da número de orden, busca solo por el teléfono de este chat.",
   sensitivity: "read",
   schema,
   enabledFor: () => true,

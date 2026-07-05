@@ -14,10 +14,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ModelPicker } from "@/features/agents/components/model-picker";
+import { TiendanubeSection } from "./tiendanube-section";
+import { ShopifySection } from "./shopify-section";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Provider = "ycloud" | "openrouter" | "highlevel" | "woocommerce";
+type Provider =
+  | "ycloud"
+  | "openrouter"
+  | "highlevel"
+  | "woocommerce"
+  | "tiendanube"
+  | "shopify";
 
 type IntegrationData = {
   provider: Provider;
@@ -1231,6 +1239,8 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
   const openrouter = findIntegration(integrations, "openrouter");
   const highlevel = findIntegration(integrations, "highlevel");
   const woocommerce = findIntegration(integrations, "woocommerce");
+  const tiendanube = findIntegration(integrations, "tiendanube");
+  const shopify = findIntegration(integrations, "shopify");
 
   return (
     <div className="space-y-6">
@@ -1255,6 +1265,18 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
       <WooCommerceSection
         workspaceId={workspaceId}
         initial={woocommerce}
+        onSaved={refresh}
+      />
+      <Separator />
+      <TiendanubeSection
+        workspaceId={workspaceId}
+        initial={tiendanube}
+        onSaved={refresh}
+      />
+      <Separator />
+      <ShopifySection
+        workspaceId={workspaceId}
+        initial={shopify}
         onSaved={refresh}
       />
     </div>

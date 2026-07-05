@@ -38,17 +38,17 @@ const schema = z.object({
 type Args = z.infer<typeof schema>;
 
 async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
-  const { getWcConfig } = await import("../../ecommerce/services/wc-config");
-  const { searchProducts } = await import(
-    "../../ecommerce/services/search.service"
+  const { getEcommerceConnection, searchProductsFor } = await import(
+    "../../ecommerce/services/provider"
   );
 
-  const cfg = await getWcConfig(ctx.workspaceId);
-  if (!cfg) {
+  const conn = await getEcommerceConnection(ctx.workspaceId);
+  if (!conn) {
     return {
       ok: false,
       output: null,
-      error: "WooCommerce no está conectado para este workspace",
+      error:
+        "No hay una tienda conectada para este workspace (WooCommerce, Tiendanube o Shopify)",
     };
   }
 
@@ -65,7 +65,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
     };
   }
 
-  const result = await searchProducts(cfg, {
+  const result = await searchProductsFor(conn, {
     query: args.query,
     categorySlug: args.category_slug,
     productSlug: args.product_slug,
@@ -79,7 +79,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
 export const buscarProductoTool: Tool<Args> = {
   name: "buscar_producto",
   description:
-    "Busca productos REALES en el catálogo WooCommerce de la tienda: precio, stock, talles y link. Úsalo SIEMPRE que el cliente pregunte por un producto, precio o stock — nunca inventes precios ni links. Acepta término de búsqueda, link de producto/categoría o slug.",
+    "Busca productos REALES en el catálogo de la tienda conectada (WooCommerce, Tiendanube o Shopify): precio, stock y link. Úsalo SIEMPRE que el cliente pregunte por un producto, precio o stock — nunca inventes precios ni links. Acepta término de búsqueda, link de producto/categoría o slug.",
   sensitivity: "read",
   schema,
   enabledFor: () => true,
