@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Building2,
+  ClipboardCheck,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -152,6 +153,17 @@ export default async function MainLayout({
             </Button>
           </Link>
 
+          <Link href="/onboarding-cliente">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <ClipboardCheck className="h-4 w-4" aria-hidden="true" />
+              <span className="sr-only sm:not-sr-only sm:ml-2">Onboarding</span>
+            </Button>
+          </Link>
+
           <Link href="/settings">
             <Button
               variant="ghost"
@@ -218,6 +230,14 @@ export default async function MainLayout({
         >
           <FileText className="h-5 w-5" aria-hidden="true" />
           <span>Reportes</span>
+        </Link>
+
+        <Link
+          href="/onboarding-cliente"
+          className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground hover:text-primary transition-colors"
+        >
+          <ClipboardCheck className="h-5 w-5" aria-hidden="true" />
+          <span>Onboarding</span>
         </Link>
 
         <Link
