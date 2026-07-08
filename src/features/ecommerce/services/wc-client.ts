@@ -99,6 +99,34 @@ export async function searchOrderByPhone(
   return toWooOrder(raw[0]);
 }
 
+// ── REST v3 fallback para catálogo (cuando Store API está rota por plugins) ──
+// Excluye campos de precio para evitar que plugins de pricing dinámico crasheen.
+
+const REST_V3_SAFE_FIELDS =
+  "id,name,slug,permalink,short_description,stock_status,categories";
+
+interface RawRestProduct {
+  id: number;
+  name: string;
+  slug: string;
+  permalink: string;
+  short_description?: string;
+  stock_status: "instock" | "outofstock" | "onbackorder";
+  categories?: Array<{ id: number; name: string; slug: string }>;
+}
+
+function toWooProductFromRest(raw: RawRestProduct): WooProduct {
+  return {
+    id: raw.id,
+    name: stripHtml(raw.name),
+    price: "",
+    inStock: raw.stock_status === "instock",
+    permalink: raw.permalink,
+    shortDescription: stripHtml(raw.short_description ?? ""),
+    categories: (raw.categories ?? []).map((c) => c.name),
+  };
+}
+
 // ── Catálogo — vía Store API PÚBLICA (no requiere consumer keys) ─────────────
 
 async function storeFetch(
@@ -171,30 +199,52 @@ function toWooProductFromStore(raw: RawStoreProduct): WooProduct {
   };
 }
 
-/** Busca productos por palabra clave (parámetro `search` de la Store API). */
+/** Busca productos por palabra clave. Store API primero; si falla, REST v3 sin precio. */
 export async function searchProductsByTerm(
   cfg: WcWorkspaceConfig,
   term: string,
   limit: number,
 ): Promise<WooProduct[]> {
   const q = encodeURIComponent(term);
-  const raw = (await storeFetch(
-    cfg,
-    `/products?search=${q}&per_page=${limit}`,
-  )) as RawStoreProduct[] | null;
-  return (raw ?? []).map(toWooProductFromStore);
+  try {
+    const raw = (await storeFetch(
+      cfg,
+      `/products?search=${q}&per_page=${limit}`,
+    )) as RawStoreProduct[] | null;
+    return (raw ?? []).map(toWooProductFromStore);
+  } catch {
+    if (cfg.consumerKey && cfg.consumerSecret) {
+      const raw = (await wcFetch(
+        cfg,
+        `/products?search=${q}&per_page=${limit}&_fields=${REST_V3_SAFE_FIELDS}`,
+      )) as RawRestProduct[] | null;
+      return (raw ?? []).map(toWooProductFromRest);
+    }
+    throw new WooCommerceError("Store API no disponible y sin credenciales REST v3");
+  }
 }
 
-/** Busca un producto por su slug (el último segmento del link `/producto/<slug>/`). */
+/** Busca un producto por su slug. Store API primero; si falla, REST v3 sin precio. */
 export async function getProductsBySlug(
   cfg: WcWorkspaceConfig,
   slug: string,
 ): Promise<WooProduct[]> {
   const q = encodeURIComponent(slug);
-  const raw = (await storeFetch(cfg, `/products?slug=${q}`)) as
-    | RawStoreProduct[]
-    | null;
-  return (raw ?? []).map(toWooProductFromStore);
+  try {
+    const raw = (await storeFetch(cfg, `/products?slug=${q}`)) as
+      | RawStoreProduct[]
+      | null;
+    return (raw ?? []).map(toWooProductFromStore);
+  } catch {
+    if (cfg.consumerKey && cfg.consumerSecret) {
+      const raw = (await wcFetch(
+        cfg,
+        `/products?slug=${q}&_fields=${REST_V3_SAFE_FIELDS}`,
+      )) as RawRestProduct[] | null;
+      return (raw ?? []).map(toWooProductFromRest);
+    }
+    throw new WooCommerceError("Store API no disponible y sin credenciales REST v3");
+  }
 }
 
 interface RawStoreCategory {
@@ -260,8 +310,18 @@ export async function pingWooCommerce(cfg: WcWorkspaceConfig): Promise<{
   try {
     await storeFetch(cfg, `/products?per_page=1`, 5000);
     storeOk = true;
-  } catch (e) {
-    error = e instanceof Error ? e.message : "error desconocido (Store API)";
+  } catch {
+    // Store API broken (e.g. pricing plugin crash) — try REST v3 products
+    if (cfg.consumerKey && cfg.consumerSecret) {
+      try {
+        await wcFetch(cfg, `/products?per_page=1&_fields=${REST_V3_SAFE_FIELDS}`, 5000);
+        storeOk = true; // REST v3 fallback works
+      } catch (e2) {
+        error = e2 instanceof Error ? e2.message : "error desconocido (catálogo)";
+      }
+    } else {
+      error = "Store API no disponible y sin credenciales REST v3";
+    }
   }
 
   if (cfg.consumerKey && cfg.consumerSecret) {
@@ -286,15 +346,26 @@ export async function pingWooCommerce(cfg: WcWorkspaceConfig): Promise<{
   };
 }
 
-/** Productos de una categoría por su id. */
+/** Productos de una categoría por su id. Store API primero; si falla, REST v3 sin precio. */
 export async function getProductsByCategoryId(
   cfg: WcWorkspaceConfig,
   id: number,
   limit: number,
 ): Promise<WooProduct[]> {
-  const raw = (await storeFetch(
-    cfg,
-    `/products?category=${id}&per_page=${limit}`,
-  )) as RawStoreProduct[] | null;
-  return (raw ?? []).map(toWooProductFromStore);
+  try {
+    const raw = (await storeFetch(
+      cfg,
+      `/products?category=${id}&per_page=${limit}`,
+    )) as RawStoreProduct[] | null;
+    return (raw ?? []).map(toWooProductFromStore);
+  } catch {
+    if (cfg.consumerKey && cfg.consumerSecret) {
+      const raw = (await wcFetch(
+        cfg,
+        `/products?category=${id}&per_page=${limit}&_fields=${REST_V3_SAFE_FIELDS}`,
+      )) as RawRestProduct[] | null;
+      return (raw ?? []).map(toWooProductFromRest);
+    }
+    throw new WooCommerceError("Store API no disponible y sin credenciales REST v3");
+  }
 }
