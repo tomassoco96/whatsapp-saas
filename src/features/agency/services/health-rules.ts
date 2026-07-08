@@ -10,7 +10,8 @@ export type AlertType =
   | "buffer_trabado"
   | "silencio_anomalo"
   | "gasto_llm_anomalo"
-  | "errores_tools";
+  | "errores_tools"
+  | "bot_limitado";
 
 export type AlertSeverity = "warning" | "critical";
 
@@ -213,6 +214,55 @@ export function evaluateToolErrors(
     severity: "warning",
     message: `${errorsLastHour} errores de tools en la última hora — revisar integración/credenciales`,
     payload: { errors_last_hour: errorsLastHour },
+  };
+}
+
+export interface RateLimitStats {
+  /** Bloqueos por techo de turnos de un mismo contacto. */
+  contactHour: number;
+  /** Bloqueos por presupuesto diario de tokens del workspace. */
+  dailyBudget: number;
+}
+
+/** Cuenta los eventos `rate_limited` de la última hora por motivo. */
+export function countRateLimited(
+  rows: Array<{ payload: { reason?: string | null } | null }>,
+): RateLimitStats {
+  let contactHour = 0;
+  let dailyBudget = 0;
+  for (const row of rows) {
+    const reason = row.payload?.reason;
+    if (reason === "daily_token_budget_exceeded") dailyBudget++;
+    else if (reason === "rate_limit_contact_hour") contactHour++;
+  }
+  return { contactHour, dailyBudget };
+}
+
+/**
+ * El bot dejó de responder por un techo de costo. Agotar el presupuesto DIARIO
+ * es critical: el workspace queda mudo hasta el reset. El techo por contacto es
+ * warning: solo afecta a esa persona, y puede ser legítimo (alguien spameando).
+ */
+export function evaluateRateLimited(
+  stats: RateLimitStats,
+): AlertCandidate | null {
+  if (stats.dailyBudget > 0) {
+    return {
+      type: "bot_limitado",
+      severity: "critical",
+      message: `El bot dejó de responder: se agotó el presupuesto diario de tokens (${stats.dailyBudget} mensaje(s) sin responder en la última hora). Subí el límite en la configuración del workspace.`,
+      payload: {
+        daily_budget_blocks: stats.dailyBudget,
+        contact_hour_blocks: stats.contactHour,
+      },
+    };
+  }
+  if (stats.contactHour === 0) return null;
+  return {
+    type: "bot_limitado",
+    severity: "warning",
+    message: `${stats.contactHour} mensaje(s) sin responder en la última hora por el techo de turnos por contacto`,
+    payload: { contact_hour_blocks: stats.contactHour, daily_budget_blocks: 0 },
   };
 }
 

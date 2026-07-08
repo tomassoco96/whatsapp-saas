@@ -8,9 +8,11 @@ import { createClient as createServiceClient } from "@supabase/supabase-js";
 import {
   computeLlmSpend,
   countInbound,
+  countRateLimited,
   countStuckBatches,
   evaluateBufferStuck,
   evaluateLlmSpend,
+  evaluateRateLimited,
   evaluateSilence,
   evaluateToolErrors,
   planAlertChanges,
@@ -130,7 +132,7 @@ export async function runHealthCheck(
   const llmWindowStartIso = new Date(todayStartMs - 7 * DAY_MS).toISOString();
   const oneHourAgoIso = new Date(nowMs - 3_600_000).toISOString();
 
-  const [batchesRes, inboundRes, llmRes, toolErrRes, openRes] =
+  const [batchesRes, inboundRes, llmRes, toolErrRes, rateLimitRes, openRes] =
     await Promise.all([
       // a. Buffer trabado: batches todavía en 'buffering' (el flush corre
       //    cada minuto; si flush_at quedó >10' en el pasado, algo está roto).
@@ -162,6 +164,14 @@ export async function runHealthCheck(
         .eq("level", "error")
         .gte("created_at", oneHourAgoIso)
         .in("workspace_id", ids),
+      // e. Bot limitado: mensajes que quedaron sin responder por un techo de
+      //    costo (cost-tracker inserta events type='rate_limited').
+      supabase
+        .from("events")
+        .select("workspace_id, payload")
+        .eq("type", "rate_limited")
+        .gte("created_at", oneHourAgoIso)
+        .in("workspace_id", ids),
       // Alertas abiertas actuales (para dedupe / auto-resolución).
       supabase
         .from("workspace_alerts")
@@ -170,9 +180,14 @@ export async function runHealthCheck(
         .in("workspace_id", ids),
     ]);
 
-  const failed = [batchesRes, inboundRes, llmRes, toolErrRes, openRes].find(
-    (r) => r.error,
-  );
+  const failed = [
+    batchesRes,
+    inboundRes,
+    llmRes,
+    toolErrRes,
+    rateLimitRes,
+    openRes,
+  ].find((r) => r.error);
   if (failed?.error) throw new Error(failed.error.message);
 
   type Row = { workspace_id: string };
@@ -203,6 +218,11 @@ export async function runHealthCheck(
     > | null,
   );
   const toolErrByWs = groupByWs(toolErrRes.data as Row[] | null);
+  const rateLimitByWs = groupByWs(
+    rateLimitRes.data as Array<
+      Row & { payload: { reason?: string | null } | null }
+    > | null,
+  );
   const openByWs = groupByWs(
     (openRes.data as (OpenAlertRow & { workspace_id: string })[] | null) ?? [],
   );
@@ -222,6 +242,7 @@ export async function runHealthCheck(
       evaluateSilence(countInbound(inboundByWs.get(ws.id) ?? [], nowMs)),
       evaluateLlmSpend(computeLlmSpend(llmByWs.get(ws.id) ?? [], todayStartMs)),
       evaluateToolErrors((toolErrByWs.get(ws.id) ?? []).length),
+      evaluateRateLimited(countRateLimited(rateLimitByWs.get(ws.id) ?? [])),
     ].filter((c): c is AlertCandidate => c !== null);
 
     const plan = planAlertChanges(candidates, openByWs.get(ws.id) ?? []);

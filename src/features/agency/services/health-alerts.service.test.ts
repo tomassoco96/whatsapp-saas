@@ -34,13 +34,15 @@ afterEach(() => {
 /**
  * Orden FIFO de queries del orquestador (cada .from() consume UNA respuesta):
  * 1 workspaces · 2 message_batches · 3 messages · 4 events llm_usage ·
- * 5 events tool_call error · 6 workspace_alerts abiertas · luego escrituras.
+ * 5 events tool_call error · 6 events rate_limited · 7 workspace_alerts
+ * abiertas · luego escrituras.
  */
 function pushBaseline(over: {
   batches?: unknown[];
   inbound?: unknown[];
   llm?: unknown[];
   toolErrors?: unknown[];
+  rateLimited?: unknown[];
   open?: unknown[];
 }) {
   h.mock.queue.push(
@@ -49,6 +51,7 @@ function pushBaseline(over: {
     { data: over.inbound ?? [] },
     { data: over.llm ?? [] },
     { data: over.toolErrors ?? [] },
+    { data: over.rateLimited ?? [] },
     { data: over.open ?? [] },
   );
 }
@@ -204,10 +207,45 @@ describe("runHealthCheck", () => {
     expect(resolveIn.args).toEqual(["id", ["al-res"]]);
   });
 
+  it("presupuesto diario agotado crea alerta critical 'bot_limitado'", async () => {
+    pushBaseline({
+      inbound: [{ workspace_id: "ws-a", created_at: minsAgo(10) }],
+      rateLimited: [
+        { workspace_id: "ws-a", payload: { reason: "daily_token_budget_exceeded" } },
+        { workspace_id: "ws-a", payload: { reason: "rate_limit_contact_hour" } },
+      ],
+    });
+    h.mock.queue.push({
+      data: [
+        {
+          id: "al-3",
+          workspace_id: "ws-a",
+          type: "bot_limitado",
+          severity: "critical",
+          message: "presupuesto agotado",
+          created_at: NOW.toISOString(),
+        },
+      ],
+    });
+
+    const summary = await runHealthCheck(NOW);
+
+    expect(summary.created).toBe(1);
+    const insert = h.mock.calls.find(
+      (c) => c.table === "workspace_alerts" && c.method === "insert",
+    )!;
+    const rows = insert.args[0] as Array<Record<string, unknown>>;
+    expect(rows[0]).toMatchObject({
+      type: "bot_limitado",
+      severity: "critical",
+    });
+  });
+
   it("propaga el error si falla una query de datos", async () => {
     h.mock.queue.push(
       { data: WS },
       { data: null, error: { message: "batches caído" } },
+      { data: [] },
       { data: [] },
       { data: [] },
       { data: [] },

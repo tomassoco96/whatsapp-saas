@@ -7,7 +7,10 @@ import {
 } from "@/features/inbox/services/evolution-webhook-handler";
 import { processInbound } from "@/features/inbox/services/normalizer";
 import { applyMessageStatusUpdate } from "@/features/inbox/services/message-status";
-import { checkRateLimits } from "@/features/inbox/services/cost-tracker";
+import {
+  checkRateLimits,
+  notifyRateLimited,
+} from "@/features/inbox/services/cost-tracker";
 import {
   upsertBatch,
   processNextBatch,
@@ -162,11 +165,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ received: true, ai: false });
     }
 
-    const { allowed, reason } = await checkRateLimits(workspaceId, contact.id);
+    const { allowed, reason, limit } = await checkRateLimits(
+      workspaceId,
+      contact.id,
+    );
     if (!allowed) {
       // SEC-09: solo campos no sensibles en logs
       console.warn("[webhook:evolution] rate limited:", reason ?? "unknown");
-      if (mediaJob) after(mediaJob);
+      // Deja el evento y avisa al contacto una vez, en vez de callarse.
+      after(async () => {
+        if (mediaJob) await mediaJob();
+        if (reason) {
+          await notifyRateLimited({
+            workspaceId,
+            conversationId: conversation.id,
+            contactId: contact.id,
+            reason,
+            limit,
+          });
+        }
+      });
       return NextResponse.json({ received: true, rateLimited: true });
     }
 

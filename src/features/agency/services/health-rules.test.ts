@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   countInbound,
+  countRateLimited,
   countStuckBatches,
   computeLlmSpend,
   evaluateBufferStuck,
   evaluateLlmSpend,
+  evaluateRateLimited,
   evaluateSilence,
   evaluateToolErrors,
   planAlertChanges,
@@ -276,5 +278,47 @@ describe("planAlertChanges", () => {
     expect(plan.toInsert).toEqual([nuevo]);
     expect(plan.toUpdate.map((u) => u.id)).toEqual(["alert-1"]);
     expect(plan.toResolve).toEqual(["alert-4"]);
+  });
+});
+
+describe("countRateLimited / evaluateRateLimited", () => {
+  const rows = (reasons: (string | null)[]) =>
+    reasons.map((reason) => ({ payload: reason ? { reason } : null }));
+
+  it("cuenta los bloqueos por motivo", () => {
+    expect(
+      countRateLimited(
+        rows([
+          "rate_limit_contact_hour",
+          "daily_token_budget_exceeded",
+          "rate_limit_contact_hour",
+          null,
+        ]),
+      ),
+    ).toEqual({ contactHour: 2, dailyBudget: 1 });
+  });
+
+  it("sin bloqueos no dispara alerta", () => {
+    expect(evaluateRateLimited({ contactHour: 0, dailyBudget: 0 })).toBeNull();
+  });
+
+  it("el presupuesto diario agotado es critical: el workspace queda mudo", () => {
+    const alert = evaluateRateLimited({ contactHour: 0, dailyBudget: 3 });
+    expect(alert).not.toBeNull();
+    expect(alert!.type).toBe("bot_limitado");
+    expect(alert!.severity).toBe("critical");
+    expect(alert!.message).toContain("presupuesto diario");
+  });
+
+  it("el techo por contacto es solo warning: afecta a una persona", () => {
+    const alert = evaluateRateLimited({ contactHour: 5, dailyBudget: 0 });
+    expect(alert!.severity).toBe("warning");
+    expect(alert!.payload.contact_hour_blocks).toBe(5);
+  });
+
+  it("si hay de los dos, gana el presupuesto diario (critical)", () => {
+    const alert = evaluateRateLimited({ contactHour: 9, dailyBudget: 1 });
+    expect(alert!.severity).toBe("critical");
+    expect(alert!.payload.contact_hour_blocks).toBe(9);
   });
 });

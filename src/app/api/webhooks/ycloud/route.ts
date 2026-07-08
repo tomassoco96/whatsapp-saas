@@ -6,7 +6,10 @@ import {
 } from "@/features/inbox/services/ycloud-webhook-handler";
 import { processInbound } from "@/features/inbox/services/normalizer";
 import { applyMessageStatusUpdate } from "@/features/inbox/services/message-status";
-import { checkRateLimits } from "@/features/inbox/services/cost-tracker";
+import {
+  checkRateLimits,
+  notifyRateLimited,
+} from "@/features/inbox/services/cost-tracker";
 import {
   upsertBatch,
   processNextBatch,
@@ -218,11 +221,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     // Rate-limit check — still runs here to avoid buffering rate-limited contacts
-    const { allowed, reason } = await checkRateLimits(workspaceId, contact.id);
+    const { allowed, reason, limit } = await checkRateLimits(
+      workspaceId,
+      contact.id,
+    );
     if (!allowed) {
       // SEC-09: log only non-sensitive fields (no credentials or contact PII)
       console.warn("[webhook] rate limited:", reason ?? "unknown reason");
-      if (mediaJob) after(mediaJob);
+      // Leave the event and tell the contact once, instead of going silent.
+      after(async () => {
+        if (mediaJob) await mediaJob();
+        if (reason) {
+          await notifyRateLimited({
+            workspaceId,
+            conversationId: conversation.id,
+            contactId: contact.id,
+            reason,
+            limit,
+          });
+        }
+      });
       return NextResponse.json({ received: true, rateLimited: true });
     }
 

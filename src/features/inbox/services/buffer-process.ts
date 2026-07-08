@@ -4,7 +4,7 @@
 
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { generateWithTools } from "./openrouter";
-import { recordLlmUsage } from "./cost-tracker";
+import { recordLlmUsage, notifyRateLimited } from "./cost-tracker";
 import { dispatchText } from "./dispatch";
 import { decide } from "./decision-engine";
 import type { ToolContext } from "@/features/tools/core/tool";
@@ -124,6 +124,20 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
 
     if (decision !== "respond") {
       console.info("[buffer] not responding:", decision, reason);
+      // El silencio por handoff o pausa es intencional; el del rate limit no:
+      // el webhook chequea antes de bufferear, pero el techo se puede cruzar en
+      // los ~30s de la ventana. Dejamos evento y avisamos una vez.
+      if (decision === "rate_limited") {
+        await notifyRateLimited({
+          workspaceId: batch.workspace_id,
+          conversationId: batch.conversation_id,
+          contactId: conversation.contact_id as string,
+          reason:
+            reason === "daily_token_budget_exceeded"
+              ? "daily_token_budget_exceeded"
+              : "rate_limit_contact_hour",
+        });
+      }
       await markBatchProcessed(batch.id, mergedText, supabase);
       return { processed: true, conversationId: batch.conversation_id };
     }
