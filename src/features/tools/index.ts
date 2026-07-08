@@ -6,6 +6,8 @@ import { checkAvailabilityTool } from "./tools/check-availability";
 import { customWebhookTool } from "./tools/custom-webhook";
 import { buscarProductoTool } from "./tools/buscar-producto";
 import { estadoPedidoTool } from "./tools/estado-pedido";
+import { calificarLeadTool } from "./tools/calificar-lead";
+import { cuentaCorrienteTool } from "./tools/cuenta-corriente";
 
 registry.register(echoTool);
 registry.register(scheduleLinkTool);
@@ -14,6 +16,8 @@ registry.register(checkAvailabilityTool);
 registry.register(customWebhookTool);
 registry.register(buscarProductoTool);
 registry.register(estadoPedidoTool);
+registry.register(calificarLeadTool);
+registry.register(cuentaCorrienteTool);
 
 export { registry };
 export type {
