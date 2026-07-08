@@ -253,12 +253,15 @@ export async function qualifyLead(
       .eq("workspace_id", workspaceId)
       .eq("contacto_phone", input.contactoPhone);
 
+    // Sin notificacion (alertas apagadas, vendedor sin telefono o canal caido):
+    // el lead igual queda asignado, pero alguien tiene que avisarle a mano.
     if (!notified) {
       await recordAlert(workspaceId, "lead_vendedor_sin_notificar", {
         contacto_phone: input.contactoPhone,
         vendedor: vendedor.nombre,
+        vendedor_id: vendedor.id,
         detalle:
-          "Lead asignado pero no se pudo notificar al vendedor por WhatsApp. Avisarle manualmente.",
+          "Lead asignado pero el vendedor NO fue notificado por WhatsApp (alertas desactivadas o envío fallido). Avisarle manualmente.",
       });
     }
 

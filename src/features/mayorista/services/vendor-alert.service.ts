@@ -42,12 +42,33 @@ function buildAlertBody(lead: LeadResumen): string {
 }
 
 /**
+ * Las alertas salen a TELEFONOS REALES de vendedores. Arrancan APAGADAS: se
+ * encienden con OK explicito del cliente, igual que la recuperacion de carritos.
+ * Flag: business_info.structured.vendor_alerts_enabled === true.
+ */
+async function vendorAlertsEnabled(
+  supabase: ReturnType<typeof svc>,
+  workspaceId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("business_info")
+    .select("structured")
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+  const structured = (data?.structured ?? null) as {
+    vendor_alerts_enabled?: boolean;
+  } | null;
+  return structured?.vendor_alerts_enabled === true;
+}
+
+/**
  * Alerta por WhatsApp al vendedor asignado (el hueco del v1: alli solo quedaba
  * una fila en el dashboard). Crea/reusa el contacto y la conversacion del
  * vendedor en el MISMO canal del workspace y envia via dispatchText (SEC-04).
  *
- * Best-effort: si falla (sin telefono, canal caido) devuelve false y el caller
- * registra el evento para seguimiento manual — nunca rompe la calificacion.
+ * Best-effort: si falla (sin telefono, canal caido, alertas apagadas) devuelve
+ * false y el caller registra el evento para seguimiento manual — nunca rompe la
+ * calificacion del lead.
  */
 export async function notifyVendedorLead(
   workspaceId: string,
@@ -58,6 +79,15 @@ export async function notifyVendedorLead(
 
   try {
     const supabase = svc();
+
+    // Guard: sin OK del cliente no se le escribe a ningun vendedor real.
+    if (!(await vendorAlertsEnabled(supabase, workspaceId))) {
+      console.info(
+        "[mayorista] alertas a vendedores desactivadas — lead asignado sin notificar",
+      );
+      return false;
+    }
+
     const phone = normalizePhone(vendedor.telefono, "54");
 
     const { data: contact, error: contactErr } = await supabase
