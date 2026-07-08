@@ -140,8 +140,22 @@ ${knockoutBlock}
 ${conversationHistory}
 
 Evaluate the conversation against the qualification questions and knockout rules.
-Compute a weighted score (0-100). Apply knockout rules first — if any knockout
-condition is met, set knocked_out=true. Return a structured evaluation.`;
+Compute a weighted score (0-100).
+
+CRITICAL — what a knockout is and is NOT:
+A knockout means the lead is DISQUALIFIED FOREVER. Only set knocked_out=true when
+the conversation shows POSITIVE EVIDENCE of disqualification: the lead explicitly
+refuses to provide the information, says they do not have it, or gives an answer
+that violates the rule.
+
+Information that is simply MISSING — because the agent has not asked yet, or the
+conversation is still early — is NOT a knockout. An empty answer to a question
+nobody asked means "unknown", not "disqualified". In that case set
+knocked_out=false and let the low score reflect the missing data.
+
+Example: the whole conversation is "user: Hola" → knocked_out MUST be false.
+
+Return a structured evaluation.`;
 
   const { object } = await generateObject({
     model: getModel(),
@@ -149,11 +163,19 @@ condition is met, set knocked_out=true. Return a structured evaluation.`;
     prompt,
   });
 
+  // Defensa determinista contra un knockout prematuro del evaluador: para
+  // descalificar hace falta que el lead haya dicho algo descalificante, y con un
+  // solo turno del usuario (tipico "Hola") no pudo hacerlo. El scoring bajo ya
+  // refleja la falta de datos; marcar knocked_out es TERMINAL (stage='lost' y no
+  // se vuelve a evaluar nunca), asi que nunca se decide con un turno.
+  const userTurns = (conversationHistory.match(/^user:/gm) ?? []).length;
+  const knockedOut = userTurns >= 2 ? object.knocked_out : false;
+
   // Reconcile: a knocked-out lead cannot be qualified
   return {
     ...object,
-    qualified: object.knocked_out
-      ? false
-      : object.score >= config.scoring.threshold,
+    knocked_out: knockedOut,
+    knockout_reason: knockedOut ? object.knockout_reason : null,
+    qualified: knockedOut ? false : object.score >= config.scoring.threshold,
   };
 }
