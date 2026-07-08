@@ -39,7 +39,7 @@ const Schema = z.object({
       }),
     )
     .min(1)
-    .max(20),
+    .max(50),
   draftPromptBody: z.string().max(50_000).optional(),
   modelOverride: z.string().max(120).optional(),
 });
