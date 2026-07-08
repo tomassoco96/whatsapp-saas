@@ -5,6 +5,7 @@ import {
   parseInbound,
 } from "@/features/inbox/services/ycloud-webhook-handler";
 import { processInbound } from "@/features/inbox/services/normalizer";
+import { applyMessageStatusUpdate } from "@/features/inbox/services/message-status";
 import { checkRateLimits } from "@/features/inbox/services/cost-tracker";
 import {
   upsertBatch,
@@ -28,51 +29,6 @@ function svc() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
-}
-
-// WH-02: monotonic status order — never go backwards
-const STATUS_ORDER = ["queued", "sent", "delivered", "read"] as const;
-type OrderedStatus = (typeof STATUS_ORDER)[number];
-type MessageStatus = OrderedStatus | "failed";
-
-async function handleStatusUpdate(
-  supabase: ReturnType<typeof svc>,
-  wamid: string,
-  newStatus: string,
-): Promise<void> {
-  const { data: msg } = await supabase
-    .from("messages")
-    .select("id, status")
-    .eq("wamid", wamid)
-    .single();
-
-  // Message not found — can happen for outbound we didn't track
-  if (!msg) return;
-
-  const current = msg.status as MessageStatus | null;
-
-  // 'failed' is terminal — always apply regardless of current state
-  if (newStatus === "failed") {
-    await supabase
-      .from("messages")
-      .update({ status: "failed" })
-      .eq("id", msg.id);
-    return;
-  }
-
-  // For ordered statuses: only advance, never go back
-  const currentIdx = current
-    ? STATUS_ORDER.indexOf(current as OrderedStatus)
-    : -1;
-  const newIdx = STATUS_ORDER.indexOf(newStatus as OrderedStatus);
-
-  if (newIdx > currentIdx) {
-    await supabase
-      .from("messages")
-      .update({ status: newStatus })
-      .eq("id", msg.id);
-  }
-  // else: same or lower status — ignore (monotonic guarantee)
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -178,7 +134,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         body as { whatsappMessage?: { wamid?: string; status?: string } }
       ).whatsappMessage;
       if (statusData?.wamid && statusData?.status) {
-        await handleStatusUpdate(supabase, statusData.wamid, statusData.status);
+        await applyMessageStatusUpdate(
+          supabase,
+          statusData.wamid,
+          statusData.status,
+        );
       }
       return NextResponse.json({ received: true });
     }

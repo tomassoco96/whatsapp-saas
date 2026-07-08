@@ -170,6 +170,71 @@ export async function downloadAndStoreMedia(
   return meta;
 }
 
+export interface StoreBase64Options {
+  /** Media codificado en base64 (webhookBase64 de Evolution) */
+  base64: string;
+  workspaceId: string;
+  conversationId: string;
+  mimeType?: string;
+  filename?: string;
+  caption?: string;
+}
+
+/**
+ * Guarda en Storage un media que llegó como base64 en el webhook (Evolution
+ * con webhookBase64: true). Mismo layout de path y MediaMeta que
+ * downloadAndStoreMedia, así media-understanding funciona igual para ambos
+ * proveedores.
+ */
+export async function storeBase64Media(
+  opts: StoreBase64Options,
+): Promise<MediaMeta | null> {
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(opts.base64, "base64");
+  } catch {
+    console.error("[media-handler] invalid base64 payload");
+    return null;
+  }
+  if (buffer.byteLength === 0) return null;
+  // Guardrail: 32 MB máximo (límite práctico de media de WhatsApp)
+  if (buffer.byteLength > 32 * 1024 * 1024) {
+    console.error("[media-handler] base64 media exceeds 32MB, skipping");
+    return null;
+  }
+
+  const mimeType = opts.mimeType?.split(";")[0].trim() || "application/octet-stream";
+  const ext = extensionFor(mimeType);
+  const safeName = (opts.filename ?? "media").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const storagePath = `${opts.workspaceId}/${opts.conversationId}/${Date.now()}-${safeName}.${ext}`;
+
+  const supabase = svc();
+  const { error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(storagePath, buffer, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    console.error(
+      "[media-handler] base64 storage upload failed:",
+      uploadError.message,
+    );
+    return null;
+  }
+
+  const meta: MediaMeta = {
+    storage_path: storagePath,
+    mime_type: mimeType,
+    size_bytes: buffer.byteLength,
+  };
+  if (opts.caption) meta.caption = opts.caption;
+  if (opts.filename) meta.filename = opts.filename;
+
+  return meta;
+}
+
 /**
  * Creates a 1-hour signed URL for a media file stored in whatsapp-media.
  * Returns null on error.

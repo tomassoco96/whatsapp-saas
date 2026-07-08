@@ -8,6 +8,7 @@
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { sendText, sendTemplate } from "./ycloud-client";
 import type { TemplateParams } from "./ycloud-client";
+import { sendEvolutionText } from "./evolution-client";
 import { formatWhatsAppMarkdown } from "./text-formatter";
 
 function svc() {
@@ -65,26 +66,52 @@ interface ConversationWindowRow {
   contact_id: string;
 }
 
-async function loadIntegration(
+/**
+ * Integración de canal resuelta por workspace. Si el workspace tiene YCloud y
+ * Evolution habilitados a la vez, gana YCloud (canal oficial).
+ */
+type ChannelIntegration =
+  | { provider: "ycloud"; apiKey: string; fromPhone: string }
+  | {
+      provider: "evolution";
+      serverUrl: string;
+      apiKey: string;
+      instance: string;
+    };
+
+async function loadChannelIntegration(
   workspaceId: string,
   supabase: ReturnType<typeof svc>,
-): Promise<{ apiKey: string; fromPhone: string }> {
+): Promise<ChannelIntegration> {
   const { data, error } = await supabase
     .from("integrations")
-    .select("credentials, config")
+    .select("provider, credentials, config")
     .eq("workspace_id", workspaceId)
-    .eq("provider", "ycloud")
-    .eq("enabled", true)
-    .single();
+    .in("provider", ["ycloud", "evolution"])
+    .eq("enabled", true);
 
-  if (error || !data) {
+  const rows = (data ?? []) as Array<IntegrationRow & { provider: string }>;
+  const row =
+    rows.find((r) => r.provider === "ycloud") ??
+    rows.find((r) => r.provider === "evolution");
+
+  if (error || !row) {
     throw new Error(
-      `[dispatch] YCloud integration not found: ${error?.message}`,
+      `[dispatch] channel integration not found: ${error?.message ?? "no enabled ycloud/evolution integration"}`,
     );
   }
 
-  const row = data as IntegrationRow;
+  if (row.provider === "evolution") {
+    return {
+      provider: "evolution",
+      serverUrl: (row.config.server_url as string | undefined) ?? "",
+      apiKey: (row.credentials.evolution_api_key as string | undefined) ?? "",
+      instance: (row.config.instance_name as string | undefined) ?? "",
+    };
+  }
+
   return {
+    provider: "ycloud",
     apiKey: (row.credentials.ycloud_api_key as string | undefined) ?? "",
     fromPhone: (row.config.phone_number as string | undefined) ?? "",
   };
@@ -182,31 +209,43 @@ export async function dispatchText(
     return { ok: false, error: "WINDOW_EXPIRED" };
   }
 
-  // 3. Load YCloud credentials
-  const { apiKey, fromPhone } = await loadIntegration(workspaceId, supabase);
+  // 3. Load channel credentials (YCloud or Evolution)
+  const channel = await loadChannelIntegration(workspaceId, supabase);
 
-  // 4. Send via YCloud (skip if placeholder / dev mode)
+  // 4. Send via the channel provider (skip if placeholder / dev mode)
   // YCloud returns its own `id` synchronously and assigns the WhatsApp `wamid`
   // asynchronously (delivered via a status webhook). A 2xx response means the
   // message was accepted for delivery, even when `wamid` is still empty.
+  // Evolution returns the WhatsApp message id (key.id) synchronously.
   let wamid: string | undefined;
   let ycloudId: string | undefined;
-  const realSend = Boolean(apiKey && apiKey !== "placeholder");
+  const realSend = Boolean(channel.apiKey && channel.apiKey !== "placeholder");
 
   if (realSend) {
     try {
-      const sent = await sendText({
-        apiKey,
-        from: fromPhone,
-        to: toPhone,
-        body,
-      });
-      wamid = sent.wamid || undefined;
-      ycloudId = sent.id || undefined;
+      if (channel.provider === "evolution") {
+        const sent = await sendEvolutionText({
+          serverUrl: channel.serverUrl,
+          apiKey: channel.apiKey,
+          instance: channel.instance,
+          to: toPhone,
+          body,
+        });
+        wamid = sent.id || undefined;
+      } else {
+        const sent = await sendText({
+          apiKey: channel.apiKey,
+          from: channel.fromPhone,
+          to: toPhone,
+          body,
+        });
+        wamid = sent.wamid || undefined;
+        ycloudId = sent.id || undefined;
+      }
     } catch (sendErr) {
       const errMsg =
         sendErr instanceof Error ? sendErr.message : String(sendErr);
-      console.error("[dispatch] YCloud sendText error:", errMsg);
+      console.error(`[dispatch] ${channel.provider} sendText error:`, errMsg);
 
       // Persist failed message for audit
       await supabase.from("messages").insert({
@@ -239,6 +278,7 @@ export async function dispatchText(
     sender_user_id: senderUserId ?? null,
     meta: {
       dev_mode: realSend ? undefined : true,
+      provider: channel.provider,
       ycloud_id: ycloudId,
       override_admin: overrideAdmin || undefined,
     },
@@ -301,11 +341,22 @@ export async function dispatchTemplate(
     }
   }
 
-  // 2. Load YCloud credentials
-  const { apiKey, fromPhone } = await loadIntegration(workspaceId, supabase);
+  // 2. Load channel credentials
+  const channel = await loadChannelIntegration(workspaceId, supabase);
+
+  // Los templates son un concepto de la API oficial de Meta — Evolution
+  // (Baileys) no los tiene. Error explícito para que el caller decida
+  // (recovery y setter follow-up requieren canal oficial).
+  if (channel.provider === "evolution") {
+    return {
+      ok: false,
+      error: "TEMPLATES_NOT_SUPPORTED: el canal Evolution no soporta templates de Meta",
+    };
+  }
 
   // 3. Send template via YCloud
   let wamid: string | undefined;
+  const { apiKey, fromPhone } = channel;
 
   if (apiKey && apiKey !== "placeholder") {
     try {

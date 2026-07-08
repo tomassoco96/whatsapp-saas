@@ -21,6 +21,7 @@ import { ShopifySection } from "./shopify-section";
 
 type Provider =
   | "ycloud"
+  | "evolution"
   | "openrouter"
   | "highlevel"
   | "woocommerce"
@@ -41,6 +42,10 @@ type IntegrationData = {
   // (se configuran en el plugin de WordPress).
   cart_webhook_secret?: string;
   cart_webhook_url?: string;
+  // Evolution-only: token + URL completa del webhook (se configuran en el
+  // servidor Evolution). El token se genera en el primer guardado.
+  evolution_webhook_token?: string;
+  evolution_webhook_url?: string;
 };
 
 // Un toque de la secuencia de recuperación, como lo edita la UI.
@@ -335,6 +340,216 @@ function YCloudSection({
             50). Por defecto 10.
           </p>
         </div>
+
+        <div className="flex items-center gap-2 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={testing}
+            aria-busy={testing}
+          >
+            {testing && (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden />
+            )}
+            Probar conexión
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            disabled={saving}
+            aria-busy={saving}
+          >
+            {saving && (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden />
+            )}
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+// ─── Evolution section ────────────────────────────────────────────────────────
+
+function EvolutionSection({
+  workspaceId,
+  initial,
+  onSaved,
+}: {
+  workspaceId: string;
+  initial: IntegrationData | undefined;
+  onSaved: () => void;
+}) {
+  const [serverUrl, setServerUrl] = useState(
+    (initial?.config?.server_url as string | undefined) ?? "",
+  );
+  const [apiKey, setApiKey] = useState(
+    initial?.credentials?.evolution_api_key ?? "",
+  );
+  const [instance, setInstance] = useState(
+    (initial?.config?.instance_name as string | undefined) ?? "",
+  );
+  const [enabled, setEnabled] = useState(initial?.enabled ?? false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const webhookUrl = initial?.evolution_webhook_url ?? "";
+
+  function handleCopy() {
+    if (!webhookUrl) return;
+    navigator.clipboard.writeText(webhookUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    try {
+      const res = await fetch(
+        `/api/workspace/${workspaceId}/integrations/evolution/test`,
+        { method: "POST" },
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        state?: string;
+        error?: string;
+      };
+      if (json.ok) {
+        toast.success(
+          json.state === "open"
+            ? "Evolution conectado — instancia vinculada a WhatsApp"
+            : `Evolution responde, pero la instancia está "${json.state}" (falta escanear el QR)`,
+        );
+      } else {
+        toast.error(json.error ?? "Error al probar la conexión");
+      }
+    } catch {
+      toast.error("Error de red al probar la conexión");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/workspace/${workspaceId}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "evolution",
+          enabled,
+          credentials: { evolution_api_key: apiKey },
+          config: { server_url: serverUrl, instance_name: instance },
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (json.ok) {
+        toast.success("Configuración de Evolution guardada");
+        onSaved();
+      } else {
+        toast.error(json.error ?? "Error al guardar");
+      }
+    } catch {
+      toast.error("Error de red al guardar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section
+      title="Evolution (WhatsApp no oficial)"
+      description="Canal de prueba o económico vía Evolution API. Si YCloud está habilitado, YCloud tiene prioridad para enviar."
+    >
+      <div className="grid gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="evo-server">URL del servidor Evolution</Label>
+          <Input
+            id="evo-server"
+            type="url"
+            placeholder="https://evolution.tudominio.com"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="evo-api-key">API Key</Label>
+          <Input
+            id="evo-api-key"
+            type="password"
+            placeholder="clave global o de la instancia"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="evo-instance">Nombre de la instancia</Label>
+          <Input
+            id="evo-instance"
+            placeholder="brogas"
+            value={instance}
+            onChange={(e) => setInstance(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Una instancia por número. Se crea en el servidor Evolution y se
+            vincula escaneando el QR desde el teléfono.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Webhook URL</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={
+                webhookUrl ||
+                "Guardá la configuración para generar la URL (incluye el token)"
+              }
+              className="font-mono text-xs text-muted-foreground"
+              aria-label="Webhook URL (solo lectura)"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCopy}
+              disabled={!webhookUrl}
+              aria-label="Copiar URL del webhook"
+            >
+              {copied ? (
+                <CheckCircle2 className="h-4 w-4 text-green-500" aria-hidden />
+              ) : (
+                <Copy className="h-4 w-4" aria-hidden />
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Configurala en la instancia de Evolution con los eventos
+            MESSAGES_UPSERT y MESSAGES_UPDATE, y la opción base64 activada
+            (webhookBase64) para que lleguen audios e imágenes.
+          </p>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          Canal habilitado
+        </label>
 
         <div className="flex items-center gap-2 pt-2">
           <Button
@@ -1236,6 +1451,7 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
   }, [workspaceId]);
 
   const ycloud = findIntegration(integrations, "ycloud");
+  const evolution = findIntegration(integrations, "evolution");
   const openrouter = findIntegration(integrations, "openrouter");
   const highlevel = findIntegration(integrations, "highlevel");
   const woocommerce = findIntegration(integrations, "woocommerce");
@@ -1247,6 +1463,12 @@ export function IntegrationsTab({ workspaceId, initialIntegrations }: Props) {
       <YCloudSection
         workspaceId={workspaceId}
         initial={ycloud}
+        onSaved={refresh}
+      />
+      <Separator />
+      <EvolutionSection
+        workspaceId={workspaceId}
+        initial={evolution}
         onSaved={refresh}
       />
       <Separator />

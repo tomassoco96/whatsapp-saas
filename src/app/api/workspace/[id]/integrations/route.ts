@@ -10,6 +10,7 @@ import {
 const IntegrationSchema = z.object({
   provider: z.enum([
     "ycloud",
+    "evolution",
     "openrouter",
     "highlevel",
     "woocommerce",
@@ -88,6 +89,23 @@ export async function GET(
       };
     }
 
+    // El token del webhook de Evolution autoriza solo la inyeccion de eventos
+    // inbound de esa instancia: se expone junto a la URL completa para que la
+    // UI muestre que configurar en el servidor Evolution.
+    if (row.provider === "evolution") {
+      const token =
+        typeof row.credentials?.webhook_token === "string"
+          ? row.credentials.webhook_token
+          : "";
+      return {
+        ...base,
+        evolution_webhook_token: token,
+        evolution_webhook_url: token
+          ? `${appUrl}/api/webhooks/evolution?wsid=${workspaceId}&token=${token}`
+          : "",
+      };
+    }
+
     // El secret del webhook de carritos es de baja sensibilidad (solo autoriza
     // ingesta de carritos): se expone junto a la URL para que la UI muestre
     // qué configurar en el plugin de WordPress.
@@ -159,6 +177,15 @@ export async function PUT(
     typeof mergedCreds.highlevel_webhook_secret !== "string"
   ) {
     mergedCreds.highlevel_webhook_secret = randomBytes(24).toString("hex");
+  }
+
+  // Evolution: token estable del webhook en el primer guardado (nunca se pisa
+  // uno existente — la URL configurada en el servidor Evolution sigue válida).
+  if (
+    parsed.data.provider === "evolution" &&
+    typeof mergedCreds.webhook_token !== "string"
+  ) {
+    mergedCreds.webhook_token = randomBytes(24).toString("hex");
   }
   const mergedConfig: Record<string, unknown> = {
     ...((existing?.config as object) ?? {}),

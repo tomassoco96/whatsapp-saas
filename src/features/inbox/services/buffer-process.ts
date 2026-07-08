@@ -175,20 +175,9 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
       completionTokens: reply.outputTokens,
     });
 
-    // ── 9. Load YCloud integration credentials ──────────────────────────────
-    const { data: integration, error: intError } = await supabase
-      .from("integrations")
-      .select("credentials, config")
-      .eq("workspace_id", batch.workspace_id)
-      .eq("provider", "ycloud")
-      .eq("enabled", true)
-      .single();
-
-    if (intError || !integration) {
-      throw new Error(`YCloud integration not found: ${intError?.message}`);
-    }
-
     // ── 10a. Dispatch via single exit point (SEC-04) ────────────────────────
+    // dispatch.ts resuelve la integración de canal (YCloud o Evolution) por
+    // su cuenta — acá no se precargan credenciales.
     const dispatchResult = await dispatchText({
       workspaceId: batch.workspace_id,
       conversationId: batch.conversation_id,

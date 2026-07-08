@@ -15,10 +15,16 @@ vi.mock("./ycloud-client", () => ({
   sendTemplate: vi.fn(),
 }));
 
+vi.mock("./evolution-client", () => ({
+  sendEvolutionText: vi.fn(),
+}));
+
 import { dispatchText } from "./dispatch";
 import { sendText } from "./ycloud-client";
+import { sendEvolutionText } from "./evolution-client";
 
 const mockSendText = vi.mocked(sendText);
+const mockSendEvolutionText = vi.mocked(sendEvolutionText);
 
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 const PAST = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -33,23 +39,34 @@ function queueHappyPath(opts: {
   windowExpiresAt?: string | null;
   optIn?: boolean;
   apiKey?: string;
+  provider?: "ycloud" | "evolution";
 }) {
   const {
     windowExpiresAt = FUTURE,
     optIn = true,
     apiKey = "real-key",
+    provider = "ycloud",
   } = opts;
+  // La integración de canal viene como lista (multi-provider): dispatch
+  // prioriza ycloud y cae a evolution.
+  const integrationRow =
+    provider === "evolution"
+      ? {
+          provider: "evolution",
+          credentials: { evolution_api_key: apiKey },
+          config: { server_url: "https://evo.test", instance_name: "inst1" },
+        }
+      : {
+          provider: "ycloud",
+          credentials: { ycloud_api_key: apiKey },
+          config: { phone_number: "+5215587654321" },
+        };
   h.mock.queue.push(
     { data: { window_expires_at: windowExpiresAt, contact_id: "c1" } },
     { data: { phone: "+5215512345678" } },
     { data: { contact_id: "c1" } },
     { data: { opt_in: optIn } },
-    {
-      data: {
-        credentials: { ycloud_api_key: apiKey },
-        config: { phone_number: "+5215587654321" },
-      },
-    },
+    { data: [integrationRow] },
     { error: null }, // messages insert
     { data: null }, // conversations update
   );
@@ -58,6 +75,7 @@ function queueHappyPath(opts: {
 beforeEach(() => {
   h.mock = createSupabaseMock();
   mockSendText.mockReset();
+  mockSendEvolutionText.mockReset();
 });
 
 describe("dispatchText", () => {
@@ -185,5 +203,57 @@ describe("dispatchText", () => {
       (c) => c.table === "messages" && c.method === "insert",
     );
     expect((insert!.args[0] as { status: string }).status).toBe("failed");
+  });
+
+  it("con provider evolution envía por Evolution y persiste el key.id como wamid", async () => {
+    queueHappyPath({ provider: "evolution" });
+    mockSendEvolutionText.mockResolvedValue({
+      id: "3EB0EVOID",
+      status: "PENDING",
+    });
+
+    const result = await dispatchText({
+      workspaceId: "ws1",
+      conversationId: "conv1",
+      body: "hola",
+    });
+
+    expect(result).toEqual({ ok: true, wamid: "3EB0EVOID" });
+    expect(mockSendEvolutionText).toHaveBeenCalledOnce();
+    expect(mockSendText).not.toHaveBeenCalled();
+    const call = mockSendEvolutionText.mock.calls[0][0];
+    expect(call.serverUrl).toBe("https://evo.test");
+    expect(call.instance).toBe("inst1");
+    const insert = h.mock.calls.find(
+      (c) => c.table === "messages" && c.method === "insert",
+    );
+    const row = insert!.args[0] as { meta: { provider?: string } };
+    expect(row.meta.provider).toBe("evolution");
+  });
+
+  it("si YCloud y Evolution están habilitados a la vez, gana YCloud", async () => {
+    queueHappyPath({});
+    // Segunda integración en la misma respuesta: evolution también habilitada
+    const queued = h.mock.queue[4] as { data: unknown[] };
+    queued.data.push({
+      provider: "evolution",
+      credentials: { evolution_api_key: "evo-key" },
+      config: { server_url: "https://evo.test", instance_name: "inst1" },
+    });
+    mockSendText.mockResolvedValue({
+      wamid: "wamid.oficial",
+      id: "yc1",
+      status: "accepted",
+    });
+
+    const result = await dispatchText({
+      workspaceId: "ws1",
+      conversationId: "conv1",
+      body: "hola",
+    });
+
+    expect(result).toEqual({ ok: true, wamid: "wamid.oficial" });
+    expect(mockSendText).toHaveBeenCalledOnce();
+    expect(mockSendEvolutionText).not.toHaveBeenCalled();
   });
 });
