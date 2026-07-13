@@ -25,18 +25,7 @@ export default async function InboxDetailPage({ params }: PageProps) {
 
   if (!user) redirect("/login");
 
-  // 2. Get active membership → workspace_id + role
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("workspace_id, role")
-    .eq("user_id", user.id)
-    .eq("is_active", true)
-    .limit(1)
-    .single();
-
-  const role = (membership?.role ?? "agent") as WorkspaceRole;
-
-  // 3. Fetch the conversation + contact
+  // 2. Fetch the conversation + contact (RLS scopes it to the user's workspaces)
   const { data: convData } = await supabase
     .from("conversations")
     .select("*, contact:contacts(*)")
@@ -46,6 +35,19 @@ export default async function InboxDetailPage({ params }: PageProps) {
   if (!convData) notFound();
 
   const convWithContact = convData as ConversationRow & { contact: ContactRow };
+
+  // 3. Role for THIS conversation's workspace. With multiple memberships, an
+  // arbitrary first row could belong to another workspace and the sidebar
+  // would render empty (and the role would be wrong).
+  const { data: membership } = await supabase
+    .from("memberships")
+    .select("workspace_id, role")
+    .eq("user_id", user.id)
+    .eq("workspace_id", convWithContact.workspace_id)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  const role = (membership?.role ?? "agent") as WorkspaceRole;
 
   // 4. Fetch messages (ASC, limit 100)
   const { data: messagesData } = await supabase
@@ -57,52 +59,48 @@ export default async function InboxDetailPage({ params }: PageProps) {
 
   const messages = (messagesData ?? []) as MessageRow[];
 
-  // 5. Fetch sidebar conversations (same workspace, for InboxLayout)
-  let sidebarConversations: ConversationWithContact[] = [];
+  // 5. Fetch sidebar conversations (the conversation's workspace, for InboxLayout)
+  const { data: conversations } = await supabase
+    .from("conversations")
+    .select("*, contact:contacts(*)")
+    .eq("workspace_id", convWithContact.workspace_id)
+    .order("last_message_at", { ascending: false, nullsFirst: false })
+    .limit(50);
 
-  if (membership) {
-    const { data: conversations } = await supabase
-      .from("conversations")
-      .select("*, contact:contacts(*)")
-      .eq("workspace_id", membership.workspace_id)
-      .order("last_message_at", { ascending: false, nullsFirst: false })
-      .limit(50);
+  const rows = (conversations ?? []) as (ConversationRow & {
+    contact: ContactRow;
+  })[];
 
-    const rows = (conversations ?? []) as (ConversationRow & {
-      contact: ContactRow;
-    })[];
+  const convIds = rows.map((c) => c.id);
+  const lastMessageMap = new Map<
+    string,
+    Pick<MessageRow, "body" | "direction" | "created_at">
+  >();
 
-    const convIds = rows.map((c) => c.id);
-    const lastMessageMap = new Map<
-      string,
-      Pick<MessageRow, "body" | "direction" | "created_at">
-    >();
+  if (convIds.length > 0) {
+    const { data: recentMessages } = await supabase
+      .from("messages")
+      .select("conversation_id, body, direction, created_at")
+      .in("conversation_id", convIds)
+      .order("created_at", { ascending: false });
 
-    if (convIds.length > 0) {
-      const { data: recentMessages } = await supabase
-        .from("messages")
-        .select("conversation_id, body, direction, created_at")
-        .in("conversation_id", convIds)
-        .order("created_at", { ascending: false });
-
-      if (recentMessages) {
-        for (const msg of recentMessages) {
-          if (!lastMessageMap.has(msg.conversation_id)) {
-            lastMessageMap.set(msg.conversation_id, {
-              body: msg.body,
-              direction: msg.direction,
-              created_at: msg.created_at,
-            });
-          }
+    if (recentMessages) {
+      for (const msg of recentMessages) {
+        if (!lastMessageMap.has(msg.conversation_id)) {
+          lastMessageMap.set(msg.conversation_id, {
+            body: msg.body,
+            direction: msg.direction,
+            created_at: msg.created_at,
+          });
         }
       }
     }
-
-    sidebarConversations = rows.map((conv) => ({
-      ...conv,
-      last_message: lastMessageMap.get(conv.id) ?? null,
-    }));
   }
+
+  const sidebarConversations: ConversationWithContact[] = rows.map((conv) => ({
+    ...conv,
+    last_message: lastMessageMap.get(conv.id) ?? null,
+  }));
 
   const conversation: ConversationWithContact = {
     ...convWithContact,
@@ -119,7 +117,7 @@ export default async function InboxDetailPage({ params }: PageProps) {
   return (
     <InboxLayout
       conversations={sidebarConversations}
-      workspaceId={membership?.workspace_id ?? null}
+      workspaceId={convWithContact.workspace_id}
     >
       <ChatThread
         conversation={conversation}

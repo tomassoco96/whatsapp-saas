@@ -69,6 +69,14 @@ export function ChatThread({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Clear the unread badge — on entry and again when new messages arrive
+  // while the thread is open (each inbound resets unread_count to 1).
+  useEffect(() => {
+    fetch(`/api/conversations/${conversation.id}/read`, {
+      method: "POST",
+    }).catch(() => {});
+  }, [conversation.id, messages.length]);
+
   const handleSend = async () => {
     const trimmed = draft.trim();
     if (!trimmed || sending) return;
