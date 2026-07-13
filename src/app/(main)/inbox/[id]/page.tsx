@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveWorkspace } from "@/features/workspace/services/active-workspace";
 import { InboxLayout } from "@/features/inbox/components/inbox-layout";
 import { ChatThread } from "@/features/inbox/components/chat-thread";
 import type {
@@ -36,16 +37,14 @@ export default async function InboxDetailPage({ params }: PageProps) {
 
   const convWithContact = convData as ConversationRow & { contact: ContactRow };
 
-  // 3. Role for THIS conversation's workspace. With multiple memberships, an
-  // arbitrary first row could belong to another workspace and the sidebar
-  // would render empty (and the role would be wrong).
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("workspace_id, role")
-    .eq("user_id", user.id)
-    .eq("workspace_id", convWithContact.workspace_id)
-    .eq("is_active", true)
-    .maybeSingle();
+  // 3. Enforce the active workspace: after a switch, a chat from the previous
+  // workspace can still be open in the URL — bounce to the active inbox so
+  // nothing from the other workspace stays visible.
+  const membership = await getActiveWorkspace(supabase, user.id);
+
+  if (membership && membership.workspace_id !== convWithContact.workspace_id) {
+    redirect("/inbox");
+  }
 
   const role = (membership?.role ?? "agent") as WorkspaceRole;
 

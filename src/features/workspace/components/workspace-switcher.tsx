@@ -1,7 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import {
   DropdownMenu,
@@ -24,6 +24,7 @@ export function WorkspaceSwitcher({
   activeId,
 }: WorkspaceSwitcherProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [isPending, startTransition] = useTransition();
 
   const active = workspaces.find((w) => w.workspace_id === activeId);
@@ -32,6 +33,11 @@ export function WorkspaceSwitcher({
     if (workspaceId === activeId) return;
     startTransition(async () => {
       await switchWorkspace(workspaceId);
+      // An open chat belongs to the previous workspace — leave it for the
+      // new workspace's inbox list instead of refreshing in place.
+      if (pathname.startsWith("/inbox/")) {
+        router.push("/inbox");
+      }
       router.refresh();
     });
   }
