@@ -228,6 +228,21 @@ describe("searchProducts", () => {
     expect(r.products.some((p) => p.brand === "Broktools")).toBe(true);
   });
 
+  it("saca la marca del término de búsqueda (la marca no está en los nombres)", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ name: "Cartucho Gas Butano", brand: "Brogas" }),
+    ]);
+    // El cliente/LLM metió la marca en el query — no debe llegar a WC como término.
+    await searchProducts(CFG, {
+      query: "cartucho de gas butano de brogas",
+      brand: "Brogas",
+      limit: 5,
+    });
+    const terms = mockByTerm.mock.calls.map((c) => c[1] as string);
+    expect(terms.length).toBeGreaterThan(0);
+    expect(terms.every((t) => !/brogas/i.test(t))).toBe(true);
+  });
+
   it("marca con acento/mayúsculas matchea igual (normalización)", async () => {
     mockByTerm.mockResolvedValueOnce([
       product({ id: 1, name: "Otro", brand: "Broktools" }),

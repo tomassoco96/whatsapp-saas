@@ -149,16 +149,35 @@ function brandFirst(products: WooProduct[], brand: string): WooProduct[] {
   return [...wanted, ...rest];
 }
 
+/**
+ * Saca los tokens de la marca del término de búsqueda. La marca NO está en el
+ * nombre de los productos (vive en un atributo), así que si queda en el query,
+ * la búsqueda de la frase completa falla y cae a una palabra suelta genérica
+ * (ej. "cartucho") que no trae el producto buscado. El filtro por marca se
+ * aplica aparte, sobre el `brand` de cada resultado.
+ */
+function stripBrandTokens(query: string, brand: string): string {
+  const b = normalizeBrand(brand);
+  return query
+    .split(/\s+/)
+    .filter((w) => normalizeBrand(w) !== b)
+    .join(" ")
+    .trim();
+}
+
 async function searchWithFallback(
   cfg: WcWorkspaceConfig,
   query: string,
   limit: number,
   brand?: string,
 ): Promise<WooProduct[]> {
-  // Con marca pedida se trae más y se reordena marca-primero: así el producto de
-  // la marca (aunque esté sin stock o ranquee bajo) siempre le llega al agente.
+  // Con marca pedida: (1) sacar la marca del término (no está en los nombres),
+  // (2) traer más y reordenar marca-primero, así el producto de la marca
+  // (aunque esté sin stock o ranquee bajo) siempre le llega al agente.
+  const effectiveQuery = brand ? stripBrandTokens(query, brand) : query;
+  if (brand && effectiveQuery === "") return []; // el query era solo la marca
   const fetchLimit = brand ? Math.max(limit, 15) : limit;
-  for (const term of buildSearchAttempts(query, cfg.extraStopwords)) {
+  for (const term of buildSearchAttempts(effectiveQuery, cfg.extraStopwords)) {
     const r = await searchProductsByTerm(cfg, term, fetchLimit);
     if (r.length > 0) {
       return (brand ? brandFirst(r, brand) : r).slice(0, limit);
