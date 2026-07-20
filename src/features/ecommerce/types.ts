@@ -25,6 +25,8 @@ export interface WooProduct {
   permalink: string;
   shortDescription: string;
   categories: string[];
+  /** Marca del producto (atributo "Marca"), si está cargada. */
+  brand?: string;
   /**
    * Variantes de tamaño con su precio (productos variables). Ausente si el
    * producto es simple / sin variantes.
@@ -61,6 +63,12 @@ export interface WooOrder {
   dateCreated: string;
   paymentMethodTitle?: string;
   items: Array<{ name: string; qty: number }>;
+  /**
+   * Datos de facturación — SOLO para verificar la propiedad del pedido antes de
+   * revelar su estado. NUNCA se muestran al cliente ni se pasan al LLM.
+   */
+  billingPhone?: string;
+  billingEmail?: string;
 }
 
 /** Estado normalizado a lenguaje del cliente. */

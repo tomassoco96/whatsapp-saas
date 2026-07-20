@@ -97,6 +97,15 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
 
   const retryCount = (batch.meta?.retry_count as number | undefined) ?? 0;
 
+  // ── Idempotencia (fix items 5/7) ──────────────────────────────────────────
+  // Si este turno YA se despachó, no re-enviar. Pasa cuando el worker murió
+  // (o markBatchProcessed falló) entre el envío y el marcado, y claim reclama
+  // el batch 'processing' colgado 5 min después: sin este guard, re-enviaría.
+  if (batch.dispatched_at) {
+    await markBatchProcessed(batch.id, batch.merged_text ?? "", supabase);
+    return { processed: true, conversationId: batch.conversation_id };
+  }
+
   try {
     // ── 3. Consolidate messages into one string ──────────────────────────────
     const mergedText = await consolidateBatch(batch.id, supabase);
@@ -199,7 +208,16 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
       // AI-generated: no senderUserId
     });
 
-    if (!dispatchResult.ok) {
+    if (dispatchResult.ok) {
+      // Sellar dispatched_at ANTES de marcar processed: si el worker muere en el
+      // medio, el reclaim ve el sello y no re-envía (idempotencia).
+      await supabase
+        .from("message_batches")
+        .update({ dispatched_at: new Date().toISOString() })
+        .eq("id", batch.id);
+    } else {
+      // Un fallo de envío (ventana vencida, opt-out) no se reintenta: reintentar
+      // no lo arregla. Se marca processed igual para no reprocesar.
       console.error("[buffer] dispatchText failed:", dispatchResult.error);
     }
 
@@ -271,14 +289,14 @@ export async function processNextBatch(): Promise<ProcessBatchResult> {
       };
     }
 
-    // Revert to 'buffering' with incremented retry count so it gets picked up again
-    // Use a short backoff: flush_at = now + 30s * retry_count
+    // Reintento (fix item 7): el batch se QUEDA en 'processing' con retry_after,
+    // NO vuelve a 'buffering'. Así un mensaje nuevo abre un batch aparte y no se
+    // mezcla con este turno viejo. claim lo reclama cuando retry_after vence.
     const backoffMs = 30_000 * newRetryCount;
     await supabase
       .from("message_batches")
       .update({
-        status: "buffering",
-        flush_at: new Date(Date.now() + backoffMs).toISOString(),
+        retry_after: new Date(Date.now() + backoffMs).toISOString(),
         updated_at: new Date().toISOString(),
         meta: {
           ...batch.meta,
@@ -315,7 +333,10 @@ async function markBatchProcessed(
     })
     .eq("id", batchId);
 
+  // Antes se tragaba el error (el batch quedaba 'processing' colgado, se
+  // reclamaba a los 5 min y re-enviaba). Ahora lo propaga; con dispatched_at ya
+  // sellado, el reclamo posterior no re-envía — solo re-marca.
   if (error) {
-    console.error("[buffer] markBatchProcessed error:", error);
+    throw new Error(`[buffer] markBatchProcessed error: ${error.message}`);
   }
 }

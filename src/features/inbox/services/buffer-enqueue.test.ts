@@ -20,52 +20,12 @@ beforeEach(() => {
 });
 
 describe("upsertBatch", () => {
-  it("crea un batch nuevo cuando no hay uno en buffering", async () => {
+  it("crea/extiende vía el RPC atómico upsert_batch y linkea el mensaje", async () => {
     h.mock.queue.push(
-      { data: null }, // select batch existente → ninguno
-      { data: { id: "batch-new" } }, // insert del batch nuevo
+      { data: "batch-42" }, // rpc upsert_batch → id
       { data: null }, // update messages.batch_id
     );
 
-    const batchId = await upsertBatch({
-      workspaceId: WS,
-      conversationId: CONV,
-      messageId: MSG,
-    });
-
-    expect(batchId).toBe("batch-new");
-
-    const insert = h.mock.calls.find(
-      (c) => c.table === "message_batches" && c.method === "insert",
-    );
-    expect(insert).toBeDefined();
-    const payload = insert!.args[0] as Record<string, unknown>;
-    expect(payload.workspace_id).toBe(WS);
-    expect(payload.conversation_id).toBe(CONV);
-    expect(payload.status).toBe("buffering");
-    expect(payload.message_count).toBe(1);
-    expect(payload.silence_ms).toBe(30_000); // default
-
-    const link = h.mock.calls.find(
-      (c) => c.table === "messages" && c.method === "update",
-    );
-    expect(link!.args[0]).toEqual({ batch_id: "batch-new" });
-  });
-
-  it("extiende el batch existente: incrementa count y corre flush_at", async () => {
-    h.mock.queue.push(
-      {
-        data: {
-          id: "batch-old",
-          message_count: 2,
-          flush_at: "2026-07-05T00:00:00.000Z",
-        },
-      }, // select → batch en buffering
-      { data: null }, // update del batch
-      { data: null }, // update messages.batch_id
-    );
-
-    const before = Date.now();
     const batchId = await upsertBatch({
       workspaceId: WS,
       conversationId: CONV,
@@ -73,41 +33,43 @@ describe("upsertBatch", () => {
       silenceMs: 10_000,
     });
 
-    expect(batchId).toBe("batch-old");
+    expect(batchId).toBe("batch-42");
 
-    const update = h.mock.calls.find(
-      (c) => c.table === "message_batches" && c.method === "update",
-    );
-    expect(update).toBeDefined();
-    const payload = update!.args[0] as Record<string, unknown>;
-    expect(payload.message_count).toBe(3);
-    // flush_at se corre ~silenceMs hacia adelante
-    const flushAt = new Date(payload.flush_at as string).getTime();
-    expect(flushAt).toBeGreaterThanOrEqual(before + 10_000);
+    const rpc = h.mock.calls.find((c) => c.table === "rpc:upsert_batch");
+    expect(rpc).toBeDefined();
+    expect(rpc!.args[0]).toEqual({
+      p_workspace_id: WS,
+      p_conversation_id: CONV,
+      p_silence_ms: 10_000,
+    });
 
-    // No debe insertar un batch nuevo
-    const insert = h.mock.calls.find(
-      (c) => c.table === "message_batches" && c.method === "insert",
+    const link = h.mock.calls.find(
+      (c) => c.table === "messages" && c.method === "update",
     );
-    expect(insert).toBeUndefined();
+    expect(link!.args[0]).toEqual({ batch_id: "batch-42" });
   });
 
-  it("lanza si falla el insert del batch nuevo", async () => {
-    h.mock.queue.push(
-      { data: null }, // sin batch existente
-      { data: null, error: { message: "insert boom" } }, // insert falla
-    );
+  it("usa el silence por defecto (30s) cuando no se pasa", async () => {
+    h.mock.queue.push({ data: "batch-x" }, { data: null });
+
+    await upsertBatch({ workspaceId: WS, conversationId: CONV, messageId: MSG });
+
+    const rpc = h.mock.calls.find((c) => c.method === "rpc");
+    expect((rpc!.args[0] as { p_silence_ms: number }).p_silence_ms).toBe(30_000);
+  });
+
+  it("lanza si el RPC falla", async () => {
+    h.mock.queue.push({ data: null, error: { message: "rpc boom" } });
 
     await expect(
       upsertBatch({ workspaceId: WS, conversationId: CONV, messageId: MSG }),
-    ).rejects.toThrow("Failed to create batch: insert boom");
+    ).rejects.toThrow("Failed to upsert batch: rpc boom");
   });
 
   it("no lanza si falla el link del mensaje (no fatal)", async () => {
     h.mock.queue.push(
-      { data: null },
-      { data: { id: "batch-x" } },
-      { data: null, error: { message: "link boom" } }, // update messages falla
+      { data: "batch-x" },
+      { data: null, error: { message: "link boom" } },
     );
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

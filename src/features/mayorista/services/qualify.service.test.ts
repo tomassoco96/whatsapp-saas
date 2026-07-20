@@ -97,9 +97,10 @@ describe("qualifyLead", () => {
     expect(result.message).toContain("Un vendedor de tu zona");
   });
 
-  it("faltan campos: estado incompleto y repregunta con etiquetas naturales", async () => {
+  it("bloque 1: pide primero identificación (nombre), no los datos del negocio", async () => {
     h.mock.queue.push({ data: null }, { error: null });
 
+    // Da razón social + CUIT pero le falta el nombre (bloque 1 incompleto).
     const result = await qualifyLead({
       workspaceId: WS,
       contactoPhone: PHONE,
@@ -108,18 +109,97 @@ describe("qualifyLead", () => {
     });
 
     expect(result.estado).toBe("incompleto");
-    expect(result.camposFaltantes).toContain("provincia");
-    expect(result.message).toContain("necesito");
+    // Pide el nombre (bloque 1), NO la provincia (bloque 2) todavía.
+    expect(result.camposFaltantes).toContain("nombre y apellido");
+    expect(result.camposFaltantes).not.toContain("provincia");
     expect(mockResolve).not.toHaveBeenCalled();
   });
 
-  it("CUIT inválido cuenta como faltante aunque esté presente", async () => {
+  it("bloque 2: con identificación completa, pide los datos del negocio juntos", async () => {
     h.mock.queue.push({ data: null }, { error: null });
 
-    const result = await qualifyLead({ ...FULL_INPUT, cuit: "20-12345678-0" });
+    // Bloque 1 completo; falta todo el bloque 2.
+    const result = await qualifyLead({
+      workspaceId: WS,
+      contactoPhone: PHONE,
+      nombreContacto: "Juan Pérez",
+      razonSocial: "El Tornillo SRL",
+      cuit: "20-12345678-6",
+    });
+
+    expect(result.estado).toBe("incompleto");
+    expect(result.camposFaltantes).toContain("provincia");
+    expect(result.camposFaltantes).toContain("localidad");
+    expect(result.camposFaltantes).toContain("rubro del comercio");
+  });
+
+  it("no pide teléfono ni email: no son obligatorios", async () => {
+    h.mock.queue.push({ data: null }, { error: null }, { error: null });
+    mockResolve.mockResolvedValue({
+      id: "v1",
+      nombre: "Juan Martin Munoz Fossati",
+      telefono: "+5491178537001",
+      zona: "mendoza",
+      multiple: false,
+    });
+    mockNotify.mockResolvedValue(false);
+
+    // Todo menos email y telefono → debe quedar completo igual.
+    const result = await qualifyLead({
+      workspaceId: WS,
+      contactoPhone: PHONE,
+      nombreContacto: "Juan Pérez",
+      razonSocial: "El Tornillo SRL",
+      cuit: "20-12345678-6",
+      provincia: "Mendoza",
+      localidad: "Godoy Cruz",
+      rubro: "ferretería",
+      formatoVenta: "Venta al público",
+    });
+
+    expect(result.estado).toBe("asignado");
+  });
+
+  it("CUIT inválido: mensaje específico, no 'necesito CUIT'", async () => {
+    h.mock.queue.push({ data: null }, { error: null });
+
+    const result = await qualifyLead({
+      workspaceId: WS,
+      contactoPhone: PHONE,
+      nombreContacto: "Juan Pérez",
+      razonSocial: "El Tornillo SRL",
+      cuit: "20-12345678-0",
+    });
 
     expect(result.estado).toBe("incompleto");
     expect(result.camposFaltantes).toContain("CUIT");
+    expect(result.message).toContain("no me figura como válido");
+  });
+
+  it("formato_venta que no resuelve a lista (puso el rubro) cuenta como faltante", async () => {
+    h.mock.queue.push({ data: null }, { error: null });
+
+    const result = await qualifyLead({
+      ...FULL_INPUT,
+      formatoVenta: "ferretería", // puso el rubro en el campo equivocado
+    });
+
+    expect(result.estado).toBe("incompleto");
+    expect(result.camposFaltantes).toContain(
+      "si distribuís a comercios o vendés al público",
+    );
+  });
+
+  it("propaga error si el upsert del lead falla (no sigue como si nada)", async () => {
+    h.mock.queue.push(
+      { data: null }, // select
+      { error: { message: "db caída" } }, // upsert falla
+    );
+
+    const result = await qualifyLead(FULL_INPUT);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("coordino con el equipo");
   });
 
   it("rechaza sin razón social cuando el cliente dice que no tiene", async () => {

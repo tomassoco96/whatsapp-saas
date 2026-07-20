@@ -22,7 +22,14 @@ const schema = z.object({
     .max(30)
     .optional()
     .describe(
-      "Teléfono con el que se hizo el pedido, SOLO si el cliente dio uno distinto al de este chat",
+      "Teléfono con el que se hizo el pedido, si el cliente lo aporta (sirve para verificar que el pedido es suyo cuando busca por número)",
+    ),
+  email: z
+    .string()
+    .max(120)
+    .optional()
+    .describe(
+      "Email con el que se hizo el pedido, si el cliente lo aporta (verifica propiedad al buscar por número)",
     ),
 });
 
@@ -49,30 +56,32 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
     };
   }
 
-  // Sin order_id ni phone explícito, usamos el teléfono del contacto de ESTA
-  // conversación (SEC-01: viene anclado server-side, el LLM no lo controla).
-  let phone = args.phone;
+  // Teléfono del contacto de ESTE chat (SEC-01: anclado server-side, el LLM no
+  // lo controla). Se usa como término de búsqueda cuando no hay número de orden,
+  // y SIEMPRE como prueba de propiedad cuando se busca por número (para no
+  // revelar el pedido de otra persona con solo tirar un ID secuencial).
+  const supabase = svc();
+  const { data: contact } = await supabase
+    .from("contacts")
+    .select("phone")
+    .eq("id", ctx.contactId)
+    .maybeSingle();
+  const contactPhone = (contact as { phone?: string } | null)?.phone ?? undefined;
+
+  const phone = args.phone ?? (args.order_id === undefined ? contactPhone : undefined);
+
   if (args.order_id === undefined && !phone) {
-    const supabase = svc();
-    const { data: contact } = await supabase
-      .from("contacts")
-      .select("phone")
-      .eq("id", ctx.contactId)
-      .maybeSingle();
-    phone = (contact as { phone?: string } | null)?.phone ?? undefined;
-    if (!phone) {
-      return {
-        ok: false,
-        output: null,
-        error:
-          "No hay número de orden ni teléfono para buscar; pedile al cliente el número de orden",
-      };
-    }
+    return {
+      ok: false,
+      output: null,
+      error:
+        "No hay número de orden ni teléfono para buscar; pedile al cliente el número de orden",
+    };
   }
 
   const result = await lookupOrderFor(
     conn,
-    { orderId: args.order_id, phone },
+    { orderId: args.order_id, phone, email: args.email, contactPhone },
     { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId },
   );
 
@@ -82,7 +91,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
 export const estadoPedidoTool: Tool<Args> = {
   name: "estado_pedido",
   description:
-    "Consulta el estado REAL de un pedido en la tienda conectada (WooCommerce, Tiendanube o Shopify) por número de orden o por teléfono. Úsalo SIEMPRE que el cliente pregunte por su pedido, envío o demora — nunca inventes estados. Si no da número de orden, busca solo por el teléfono de este chat.",
+    "Consulta el estado REAL de un pedido en la tienda conectada (WooCommerce, Tiendanube o Shopify) por número de orden o por teléfono. Úsalo SIEMPRE que el cliente pregunte por su pedido, envío o demora — nunca inventes estados. Si no da número de orden, busca por el teléfono de este chat. Al buscar por número, el sistema verifica que el pedido sea del cliente (por el teléfono del chat o el teléfono/email que aporte); si no coincide, te pide ese dato — pasáselo en phone/email.",
   sensitivity: "read",
   schema,
   enabledFor: () => true,

@@ -14,8 +14,16 @@ import { processNextBatch } from "@/features/inbox/services/buffer";
 
 export const schedule = "* * * * *";
 
-// Max batches to drain per cron tick — protects against burst accumulation
+// Cada batch es LLM + tools (decenas de segundos). Sin este límite, el default
+// de Vercel (~10-15s) mataba el cron a mitad de un batch, dejándolo 'processing'
+// colgado hasta el reclaim de 5 min — la fuente del "un minuto más tarde" del
+// item 5. Igual que los webhooks y los otros crons.
+export const maxDuration = 60;
+
+// Tope de batches por tick y presupuesto de tiempo: se corta antes de que Vercel
+// mate la función a mitad de un batch.
 const MAX_BATCHES_PER_RUN = 10;
+const TIME_BUDGET_MS = 50_000;
 
 export async function GET(request: Request): Promise<NextResponse> {
   // Verify Vercel cron auth header
@@ -24,9 +32,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const results: Array<{ processed: boolean; error?: string }> = [];
 
   for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+    // Cortar si no queda margen para otro batch dentro del presupuesto.
+    if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+
     const result = await processNextBatch();
     results.push(result);
 

@@ -226,6 +226,46 @@ beforeEach(() => {
     },
   ];
 
+  // RPC de encolado atómico (equivalente in-memory de upsert_batch):
+  // extiende el batch buffering de la conversación o crea uno.
+  h.db.rpcHandlers.upsert_batch = (args) => {
+    const a = (args ?? {}) as {
+      p_workspace_id?: string;
+      p_conversation_id?: string;
+      p_silence_ms?: number;
+    };
+    const now = Date.now();
+    const flushAt = new Date(now + (a.p_silence_ms ?? 30_000)).toISOString();
+    const batches = (h.db.tables.message_batches ??= []);
+    const existing = batches.find(
+      (b) =>
+        b.conversation_id === a.p_conversation_id && b.status === "buffering",
+    );
+    if (existing) {
+      existing.flush_at = flushAt;
+      existing.message_count = (Number(existing.message_count) || 0) + 1;
+      existing.updated_at = new Date(now).toISOString();
+      return { data: existing.id };
+    }
+    const id = `message_batches-${batches.length + 1}`;
+    batches.push({
+      id,
+      workspace_id: a.p_workspace_id,
+      conversation_id: a.p_conversation_id,
+      status: "buffering",
+      silence_ms: a.p_silence_ms ?? 30_000,
+      flush_at: flushAt,
+      message_count: 1,
+      merged_text: null,
+      dispatched_at: null,
+      retry_after: null,
+      meta: {},
+      created_at: new Date(now).toISOString(),
+      updated_at: new Date(now).toISOString(),
+    });
+    return { data: id };
+  };
+
   // RPC del claim atómico (equivalente in-memory de claim_next_batch)
   h.db.rpcHandlers.claim_next_batch = () => {
     const now = new Date().toISOString();

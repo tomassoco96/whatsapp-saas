@@ -34,6 +34,11 @@ const CFG: WcWorkspaceConfig = {
 
 const CTX = { workspaceId: "ws1", conversationId: "conv1" };
 
+// El pedido lo hizo alguien con este teléfono/email; el chat que consulta debe
+// coincidir para que se revele (gate de propiedad).
+const OWNER_PHONE = "+5491122334455"; // últimos 8 = 22334455
+const OWNER_EMAIL = "cliente@brogas.test";
+
 function order(over: Partial<WooOrder> = {}): WooOrder {
   return {
     id: 1234,
@@ -43,6 +48,8 @@ function order(over: Partial<WooOrder> = {}): WooOrder {
     dateCreated: "2026-07-01T10:00:00",
     paymentMethodTitle: "Transferencia",
     items: [{ name: "Pijama Invierno", qty: 2 }],
+    billingPhone: "1122334455",
+    billingEmail: OWNER_EMAIL,
     ...over,
   };
 }
@@ -53,14 +60,55 @@ beforeEach(() => {
 });
 
 describe("lookupOrder", () => {
-  it("por ID: devuelve estado normalizado con mensaje listo para el cliente", async () => {
+  it("por ID (dueño confirmado por el teléfono del chat): devuelve el estado", async () => {
     mockById.mockResolvedValue(order());
-    const r = await lookupOrder(CFG, { orderId: 1234 }, CTX);
+    const r = await lookupOrder(
+      CFG,
+      { orderId: 1234, contactPhone: OWNER_PHONE },
+      CTX,
+    );
 
     expect(r.found).toBe(true);
     expect(r.order?.statusLabel).toBe("En producción");
     expect(r.message).toContain('Tu pedido #1234 está en estado "En producción"');
     expect(mockById).toHaveBeenCalledWith(CFG, 1234);
+  });
+
+  it("por ID de OTRA persona: NO revela, pide verificación", async () => {
+    mockById.mockResolvedValue(order());
+    // El chat es de otro número, no coincide con el billing del pedido.
+    const r = await lookupOrder(
+      CFG,
+      { orderId: 1234, contactPhone: "+5491199998888" },
+      CTX,
+    );
+
+    expect(r.found).toBe(false);
+    expect(r.message).toContain("confirmar que es tuyo");
+    // No filtró ningún dato del pedido.
+    expect(r.order).toBeUndefined();
+    expect(r.message).not.toContain("En producción");
+  });
+
+  it("por ID con el teléfono del pedido aportado por el cliente: revela", async () => {
+    mockById.mockResolvedValue(order());
+    const r = await lookupOrder(
+      CFG,
+      { orderId: 1234, contactPhone: "+5491199998888", phone: "11 2233-4455" },
+      CTX,
+    );
+    expect(r.found).toBe(true);
+    expect(r.order?.statusLabel).toBe("En producción");
+  });
+
+  it("por ID con el email del pedido aportado: revela", async () => {
+    mockById.mockResolvedValue(order());
+    const r = await lookupOrder(
+      CFG,
+      { orderId: 1234, contactPhone: "+5491199998888", email: "  Cliente@Brogas.Test " },
+      CTX,
+    );
+    expect(r.found).toBe(true);
   });
 
   it("aplica los status_messages custom del workspace", async () => {
@@ -71,7 +119,11 @@ describe("lookupOrder", () => {
         "listo-retirar": { label: "Listo", customerMsg: "pasá a retirarlo" },
       },
     };
-    const r = await lookupOrder(cfg, { orderId: 1234 }, CTX);
+    const r = await lookupOrder(
+      cfg,
+      { orderId: 1234, contactPhone: OWNER_PHONE },
+      CTX,
+    );
     expect(r.order?.statusLabel).toBe("Listo");
     expect(r.message).toContain("pasá a retirarlo");
   });
@@ -117,7 +169,7 @@ describe("lookupOrder", () => {
 
   it("loguea la consulta en events con el resultado", async () => {
     mockById.mockResolvedValue(order());
-    await lookupOrder(CFG, { orderId: 1234 }, CTX);
+    await lookupOrder(CFG, { orderId: 1234, contactPhone: OWNER_PHONE }, CTX);
 
     const log = h.mock.calls.find(
       (c) => c.table === "events" && c.method === "insert",

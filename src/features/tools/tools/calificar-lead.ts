@@ -17,11 +17,13 @@ const schema = z.object({
   cuit: optional.describe("CUIT tal como lo dio el cliente (con o sin guiones)"),
   provincia: optional.describe("Provincia del comercio"),
   localidad: optional.describe("Localidad o ciudad del comercio"),
-  email: optional.describe("Correo electrónico"),
-  telefono: optional.describe("Teléfono que dio el cliente, si dio uno distinto al de este chat"),
-  rubro: optional.describe("Rubro del comercio (ferretería, bazar, corralón...)"),
+  email: optional.describe("Correo electrónico, SOLO si el cliente lo da (no es obligatorio)"),
+  telefono: optional.describe("Teléfono, SOLO si el cliente da uno distinto al de este chat (no es obligatorio)"),
+  rubro: optional.describe(
+    "QUÉ vende el comercio: ferretería, bazar, corralón, sanitarios, etc. NO confundir con formato_venta.",
+  ),
   formato_venta: optional.describe(
-    "'Distribución' si revende a comercios, 'Venta al público' si vende al consumidor",
+    "CÓMO vende, exactamente uno de dos valores: 'Distribución' si revende a otros comercios (distribuidor), 'Venta al público' si le vende al consumidor final. Si el cliente dice 'soy distribuidor' → 'Distribución'. NO pongas acá el rubro.",
   ),
   comentarios: z.string().trim().max(1000).optional().describe("Comentarios adicionales del cliente"),
   rechaza_razon_social: z
@@ -76,7 +78,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
 export const calificarLeadTool: Tool<Args> = {
   name: "calificar_lead",
   description:
-    "Registra o actualiza el lead MAYORISTA de esta conversación con los datos que el cliente fue dando. Llamalo cada vez que el cliente aporte un dato nuevo de la calificación (razón social, CUIT, zona, rubro...). El resultado te dice qué campos faltan (repreguntá uno por uno), si el CUIT es inválido, o el mensaje de cierre con el vendedor asignado. La validación del CUIT y la asignación de vendedor las hace el sistema — no las decidas vos.",
+    "Registra o actualiza el lead MAYORISTA de esta conversación con los datos que el cliente fue dando. Llamalo cada vez que el cliente aporte un dato nuevo de la calificación (razón social, CUIT, zona, rubro...). El resultado (campo camposFaltantes y message) te dice qué pedir a continuación: pedí esos datos AGRUPADOS en un solo mensaje, nunca de a uno. La validación del CUIT y la asignación de vendedor las hace el sistema — no las decidas vos; usá el message tal cual lo devuelve.",
   sensitivity: "write",
   schema,
   enabledFor: () => true,

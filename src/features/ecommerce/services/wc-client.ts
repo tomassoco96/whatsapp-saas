@@ -56,6 +56,7 @@ interface RawWooOrder {
   date_created: string;
   payment_method_title?: string;
   line_items?: Array<{ name: string; quantity: number }>;
+  billing?: { phone?: string; email?: string };
 }
 
 function toWooOrder(raw: RawWooOrder): WooOrder {
@@ -70,6 +71,9 @@ function toWooOrder(raw: RawWooOrder): WooOrder {
       name: i.name,
       qty: i.quantity,
     })),
+    // Solo para el chequeo de propiedad (nunca se muestran al cliente).
+    billingPhone: raw.billing?.phone,
+    billingEmail: raw.billing?.email,
   };
 }
 
@@ -106,7 +110,7 @@ export async function searchOrderByPhone(
 // devuelve REST v3 ya viene en pesos enteros como string ("154599"), a
 // diferencia de la Store API que lo da en unidades menores.
 const REST_V3_SAFE_FIELDS =
-  "id,name,slug,permalink,price,stock_status,short_description,categories,type";
+  "id,name,slug,permalink,price,stock_status,short_description,categories,type,attributes";
 
 interface RawRestProduct {
   id: number;
@@ -119,9 +123,20 @@ interface RawRestProduct {
   categories?: Array<{ id: number; name: string; slug: string }>;
   /** "simple" | "variable" | "grouped" | "external". */
   type?: string;
+  /** REST v3: cada atributo trae sus valores en `options`. */
+  attributes?: Array<{ name?: string; options?: string[] }>;
+}
+
+/** Marca del producto desde el atributo "Marca" (REST v3: options[0]). */
+function brandFromRestAttrs(
+  attrs?: Array<{ name?: string; options?: string[] }>,
+): string | undefined {
+  const marca = (attrs ?? []).find((a) => /marca/i.test(a.name ?? ""));
+  return marca?.options?.[0];
 }
 
 function toWooProductFromRest(raw: RawRestProduct): WooProduct {
+  const brand = brandFromRestAttrs(raw.attributes);
   return {
     id: raw.id,
     name: stripHtml(raw.name),
@@ -133,6 +148,7 @@ function toWooProductFromRest(raw: RawRestProduct): WooProduct {
     permalink: raw.permalink,
     shortDescription: stripHtml(raw.short_description ?? ""),
     categories: (raw.categories ?? []).map((c) => c.name),
+    ...(brand ? { brand } : {}),
   };
 }
 
@@ -196,6 +212,11 @@ function toWooProductFromStore(raw: RawStoreProduct): WooProduct {
   const sizes: WooSize[] | undefined = talleAttr?.terms
     ? talleAttr.terms.map((term) => ({ label: term.name, price }))
     : undefined;
+  // marca: atributo "Marca" (Store API expone los valores en `terms`).
+  const marcaAttr = (raw.attributes ?? []).find((a) =>
+    /marca/i.test(a.name ?? ""),
+  );
+  const brand = marcaAttr?.terms?.[0]?.name;
   return {
     id: raw.id,
     name: raw.name,
@@ -204,6 +225,7 @@ function toWooProductFromStore(raw: RawStoreProduct): WooProduct {
     permalink: raw.permalink,
     shortDescription: stripHtml(raw.short_description ?? ""),
     categories: (raw.categories ?? []).map((c) => c.name),
+    ...(brand ? { brand } : {}),
     ...(sizes && sizes.length ? { sizes } : {}),
   };
 }

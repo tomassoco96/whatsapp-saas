@@ -1,6 +1,11 @@
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { isValidCuit } from "../lib/cuit";
-import { computeMissing, missingLabels, type LeadFields } from "../lib/missing-fields";
+import {
+  computeMissing,
+  nextBlockMissing,
+  missingLabels,
+  type LeadFields,
+} from "../lib/missing-fields";
 import { resolveListaPrecio, type ListaPrecio } from "../lib/lista-precio";
 import { resolveVendedor } from "./resolve.service";
 import { notifyVendedorLead } from "./vendor-alert.service";
@@ -99,14 +104,13 @@ function mergeNonDestructive(
 }
 
 function rowToFields(row: Partial<LeadRow>): LeadFields {
+  // email y telefono NO son obligatorios → no entran en el cálculo de faltantes.
   return {
     nombreContacto: row.nombre_contacto,
     razonSocial: row.razon_social,
     cuit: row.cuit,
     provincia: row.provincia,
     localidad: row.localidad,
-    email: row.email,
-    telefono: row.telefono,
     rubro: row.rubro,
     formatoVenta: row.formato_venta,
   };
@@ -173,15 +177,22 @@ export async function qualifyLead(
     merged.estado = estado;
     merged.incompleto = missing.length > 0;
 
-    await supabase.from("leads_mayorista").upsert(
-      {
-        ...merged,
-        workspace_id: workspaceId,
-        contacto_phone: input.contactoPhone,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "workspace_id,contacto_phone" },
-    );
+    const { error: upsertError } = await supabase
+      .from("leads_mayorista")
+      .upsert(
+        {
+          ...merged,
+          workspace_id: workspaceId,
+          contacto_phone: input.contactoPhone,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "workspace_id,contacto_phone" },
+      );
+    // Si el guardado falla, NO seguir: la próxima llamada arrancaría con
+    // existing=null y perdería lo ya cargado. Cae al catch (mensaje de derivación).
+    if (upsertError) {
+      throw new Error(`upsert leads_mayorista: ${upsertError.message}`);
+    }
 
     if (estado === "rechazado_sin_razon_social") {
       return {
@@ -194,15 +205,25 @@ export async function qualifyLead(
     }
 
     if (estado === "incompleto") {
-      const labels = missingLabels(missing);
-      // Si el cliente abandona dejando datos a medias, igual quedo persistido
-      // arriba y visible como lead incompleto.
-      return {
-        ok: true,
-        estado,
-        camposFaltantes: labels,
-        message: `Para avanzar con la cuenta mayorista necesito: ${labels.join(", ")}. Me los pasás?`,
-      };
+      // Pedir SOLO el bloque incompleto (identificación primero, negocio
+      // después): máximo dos mensajes de repregunta, agrupados. Si el cliente
+      // abandona a medias, igual quedó persistido arriba como lead incompleto.
+      const blockMissing = nextBlockMissing(fields);
+      const labels = missingLabels(blockMissing);
+
+      // CUIT presente pero inválido: mensaje específico, no "necesito CUIT".
+      const cuitInvalidoPresente =
+        !!merged.cuit && merged.cuit.trim() !== "" && !cuitValido;
+      let message: string;
+      if (cuitInvalidoPresente && blockMissing.includes("cuit")) {
+        const otros = labels.filter((l) => l !== "CUIT");
+        message = otros.length
+          ? `El CUIT no me figura como válido, ¿me lo revisás? También me falta: ${otros.join(", ")}.`
+          : "El CUIT no me figura como válido, ¿me lo revisás? Fijate que sea el de la constancia de AFIP.";
+      } else {
+        message = `Para avanzar con la cuenta mayorista necesito: ${labels.join(", ")}. Me los pasás?`;
+      }
+      return { ok: true, estado, camposFaltantes: labels, message };
     }
 
     // Calificado: asignar vendedor por zona (localidad -> provincia).

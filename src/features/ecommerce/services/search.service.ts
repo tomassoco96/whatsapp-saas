@@ -162,6 +162,7 @@ function sanitizeProduct(p: WooProduct): WooProduct {
     name: sanitizeText(p.name, NAME_MAX),
     shortDescription: sanitizeText(p.shortDescription, DESC_MAX),
     categories: p.categories.map((c) => sanitizeText(c, NAME_MAX)),
+    ...(p.brand ? { brand: sanitizeText(p.brand, NAME_MAX) } : {}),
   };
 }
 
