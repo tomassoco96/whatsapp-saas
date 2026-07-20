@@ -8,6 +8,7 @@ import { buscarProductoTool } from "./tools/buscar-producto";
 import { estadoPedidoTool } from "./tools/estado-pedido";
 import { calificarLeadTool } from "./tools/calificar-lead";
 import { cuentaCorrienteTool } from "./tools/cuenta-corriente";
+import { derivarAHumanoTool } from "./tools/derivar-a-humano";
 
 registry.register(echoTool);
 registry.register(scheduleLinkTool);
@@ -18,6 +19,7 @@ registry.register(buscarProductoTool);
 registry.register(estadoPedidoTool);
 registry.register(calificarLeadTool);
 registry.register(cuentaCorrienteTool);
+registry.register(derivarAHumanoTool);
 
 export { registry };
 export type {
