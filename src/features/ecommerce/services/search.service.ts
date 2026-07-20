@@ -17,6 +17,8 @@ export interface ProductSearchQuery {
   categorySlug?: string;
   productSlug?: string;
   productUrl?: string;
+  /** Marca pedida por el cliente (Brogas, Broksol...). Reordena marca-primero. */
+  brand?: string;
   limit: number;
 }
 
@@ -121,14 +123,46 @@ export function buildSearchAttempts(
   return attempts;
 }
 
+/** Normaliza una marca para comparar: minúsculas, sin acentos, sin espacios extra. */
+function normalizeBrand(s?: string): string {
+  return (s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
+}
+
+function brandMatches(productBrand: string | undefined, wanted: string): boolean {
+  return normalizeBrand(productBrand) === normalizeBrand(wanted);
+}
+
+/**
+ * Reordena poniendo primero los productos de la marca pedida, SIN descartar el
+ * resto (para poder ofrecer una alternativa si la marca está sin stock). La
+ * marca en la tienda de Brogas está cargada de forma inconsistente (atributo
+ * global vs local), por eso se filtra sobre el `brand` ya extraído del producto
+ * y no con el filtro server-side de WooCommerce, que se pierde los locales.
+ */
+function brandFirst(products: WooProduct[], brand: string): WooProduct[] {
+  const wanted = products.filter((p) => brandMatches(p.brand, brand));
+  const rest = products.filter((p) => !brandMatches(p.brand, brand));
+  return [...wanted, ...rest];
+}
+
 async function searchWithFallback(
   cfg: WcWorkspaceConfig,
   query: string,
   limit: number,
+  brand?: string,
 ): Promise<WooProduct[]> {
+  // Con marca pedida se trae más y se reordena marca-primero: así el producto de
+  // la marca (aunque esté sin stock o ranquee bajo) siempre le llega al agente.
+  const fetchLimit = brand ? Math.max(limit, 15) : limit;
   for (const term of buildSearchAttempts(query, cfg.extraStopwords)) {
-    const r = await searchProductsByTerm(cfg, term, limit);
-    if (r.length > 0) return r;
+    const r = await searchProductsByTerm(cfg, term, fetchLimit);
+    if (r.length > 0) {
+      return (brand ? brandFirst(r, brand) : r).slice(0, limit);
+    }
   }
   return [];
 }
@@ -227,22 +261,28 @@ export async function searchProducts(
     let products: WooProduct[];
     let matched: WooCategory | null = null;
 
+    // Con marca pedida, en los paths de categoría se trae más para reordenar
+    // marca-primero sin perder el producto de la marca.
+    const catFetch = q.brand ? Math.max(q.limit, 15) : q.limit;
+
     if (productSlug) {
       products = await getProductsBySlug(cfg, productSlug);
     } else if (categorySlug) {
       matched = await getCategoryBySlug(cfg, categorySlug);
       products = matched
-        ? await getProductsByCategoryId(cfg, matched.id, q.limit)
+        ? await getProductsByCategoryId(cfg, matched.id, catFetch)
         : [];
+      if (q.brand) products = brandFirst(products, q.brand).slice(0, q.limit);
     } else if (q.query) {
-      products = await searchWithFallback(cfg, q.query, q.limit);
+      products = await searchWithFallback(cfg, q.query, q.limit, q.brand);
       // El término puede ser una CATEGORÍA (ej "peliculas y series"), no un
       // producto. Si no matcheó ningún producto, lo resolvemos como categoría.
       if (products.length === 0) {
         const cats = await searchCategoriesByName(cfg, q.query);
         matched = cats.find((c) => c.count > 0) ?? null;
         if (matched) {
-          products = await getProductsByCategoryId(cfg, matched.id, q.limit);
+          products = await getProductsByCategoryId(cfg, matched.id, catFetch);
+          if (q.brand) products = brandFirst(products, q.brand).slice(0, q.limit);
         }
       }
     } else {

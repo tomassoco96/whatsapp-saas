@@ -212,6 +212,40 @@ describe("searchProducts", () => {
     expect(r.message).not.toContain("$ ");
   });
 
+  it("con marca pedida: el producto de la marca viene primero, sin descartar el resto (caso cartucho Brogas)", async () => {
+    // Reproduce el caso real: el Broktools (en stock) ranquea primero en WC,
+    // el Brogas (sin stock) más abajo. Con brand=Brogas, el Brogas debe venir 1º.
+    mockByTerm.mockResolvedValueOnce([
+      product({ id: 1, name: "Cartucho Gas Butano 227 Grs", brand: "Broktools", inStock: true, price: "3599" }),
+      product({ id: 2, name: "Cartucho Gas Butano 227 Grs", brand: "Brogas", inStock: false, price: "3799" }),
+    ]);
+
+    const r = await searchProducts(CFG, { query: "cartucho gas butano", brand: "Brogas", limit: 5 });
+
+    expect(r.products[0].brand).toBe("Brogas"); // la marca pedida primero
+    expect(r.products[0].inStock).toBe(false);
+    // No descarta el Broktools: sigue disponible como alternativa.
+    expect(r.products.some((p) => p.brand === "Broktools")).toBe(true);
+  });
+
+  it("marca con acento/mayúsculas matchea igual (normalización)", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ id: 1, name: "Otro", brand: "Broktools" }),
+      product({ id: 2, name: "Termo", brand: "Broksol" }),
+    ]);
+    const r = await searchProducts(CFG, { query: "algo", brand: "BROKSOL", limit: 5 });
+    expect(r.products[0].brand).toBe("Broksol");
+  });
+
+  it("sin marca pedida: no reordena (orden original de la búsqueda)", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ id: 1, name: "A", brand: "Broktools" }),
+      product({ id: 2, name: "B", brand: "Brogas" }),
+    ]);
+    const r = await searchProducts(CFG, { query: "algo", limit: 5 });
+    expect(r.products[0].brand).toBe("Broktools"); // orden original intacto
+  });
+
   it("ante error de WooCommerce devuelve found:false con link a la tienda (nunca lanza)", async () => {
     mockByTerm.mockRejectedValue(new Error("WooCommerce respondió 500"));
     const r = await searchProducts(CFG, { query: "pijama", limit: 5 });

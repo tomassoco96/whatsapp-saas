@@ -32,6 +32,15 @@ const schema = z.object({
     .max(300)
     .optional()
     .describe("Link completo que pegó el cliente (producto o categoría)"),
+  brand: z
+    .string()
+    .trim()
+    .min(1)
+    .max(40)
+    .optional()
+    .describe(
+      "Marca que pidió el cliente (Brogas, Broksol, Brolux, Brosen, Broktools, Ayreco). Pasala cuando el cliente nombre una marca: prioriza los productos de esa marca en el resultado.",
+    ),
   limit: z.coerce.number().int().min(1).max(10).default(5),
 });
 
@@ -70,6 +79,7 @@ async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
     categorySlug: args.category_slug,
     productSlug: args.product_slug,
     productUrl: args.product_url,
+    brand: args.brand,
     limit: args.limit,
   });
 
