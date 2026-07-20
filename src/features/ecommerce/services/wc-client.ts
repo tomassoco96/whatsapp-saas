@@ -100,26 +100,35 @@ export async function searchOrderByPhone(
 }
 
 // ── REST v3 fallback para catálogo (cuando Store API está rota por plugins) ──
-// Excluye campos de precio para evitar que plugins de pricing dinámico crasheen.
-
+// Incluye `price` (el precio de venta al público, minorista) y `type`, pero NO
+// `sale_price` ni `on_sale`: esos dos son los únicos que crashean el plugin de
+// pricing dinámico de la tienda (verificado campo por campo). El precio que
+// devuelve REST v3 ya viene en pesos enteros como string ("154599"), a
+// diferencia de la Store API que lo da en unidades menores.
 const REST_V3_SAFE_FIELDS =
-  "id,name,slug,permalink,short_description,stock_status,categories";
+  "id,name,slug,permalink,price,stock_status,short_description,categories,type";
 
 interface RawRestProduct {
   id: number;
   name: string;
   slug: string;
   permalink: string;
+  price?: string;
   short_description?: string;
   stock_status: "instock" | "outofstock" | "onbackorder";
   categories?: Array<{ id: number; name: string; slug: string }>;
+  /** "simple" | "variable" | "grouped" | "external". */
+  type?: string;
 }
 
 function toWooProductFromRest(raw: RawRestProduct): WooProduct {
   return {
     id: raw.id,
     name: stripHtml(raw.name),
-    price: "",
+    // Para un producto variable, `price` es el precio de la variante más barata
+    // → se muestra como "desde $X" (ver priceFrom).
+    price: raw.price ?? "",
+    priceFrom: raw.type === "variable",
     inStock: raw.stock_status === "instock",
     permalink: raw.permalink,
     shortDescription: stripHtml(raw.short_description ?? ""),
@@ -199,7 +208,7 @@ function toWooProductFromStore(raw: RawStoreProduct): WooProduct {
   };
 }
 
-/** Busca productos por palabra clave. Store API primero; si falla, REST v3 sin precio. */
+/** Busca productos por palabra clave. Store API primero; si falla, REST v3 (con precio). */
 export async function searchProductsByTerm(
   cfg: WcWorkspaceConfig,
   term: string,
@@ -224,7 +233,7 @@ export async function searchProductsByTerm(
   }
 }
 
-/** Busca un producto por su slug. Store API primero; si falla, REST v3 sin precio. */
+/** Busca un producto por su slug. Store API primero; si falla, REST v3 (con precio). */
 export async function getProductsBySlug(
   cfg: WcWorkspaceConfig,
   slug: string,
@@ -346,7 +355,7 @@ export async function pingWooCommerce(cfg: WcWorkspaceConfig): Promise<{
   };
 }
 
-/** Productos de una categoría por su id. Store API primero; si falla, REST v3 sin precio. */
+/** Productos de una categoría por su id. Store API primero; si falla, REST v3 (con precio). */
 export async function getProductsByCategoryId(
   cfg: WcWorkspaceConfig,
   id: number,

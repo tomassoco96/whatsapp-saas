@@ -117,7 +117,7 @@ describe("searchProducts", () => {
     expect(r.found).toBe(true);
     expect(r.count).toBe(1);
     expect(mockByTerm).toHaveBeenCalledTimes(3);
-    expect(r.message).toContain("Pijama Invierno ($14000)");
+    expect(r.message).toContain("Pijama Invierno ($14.000)");
     expect(r.message).toContain("https://tienda.test/producto/pijama-invierno/");
   });
 
@@ -182,8 +182,34 @@ describe("searchProducts", () => {
       }),
     ]);
     const r = await searchProducts(CFG, { query: "pijama", limit: 5 });
-    expect(r.message).toContain("$14000, talles S, M");
+    expect(r.message).toContain("$14.000, talles S, M");
     expect(r.message).toContain("sin stock");
+  });
+
+  it("formatea el precio con separador de miles (es-AR)", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ name: "Anafe 1 Hornalla", price: "154599" }),
+    ]);
+    const r = await searchProducts(CFG, { query: "anafe", limit: 5 });
+    expect(r.message).toContain("Anafe 1 Hornalla ($154.599)");
+  });
+
+  it("producto variable: muestra 'desde $X'", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ name: "Termo Premium", price: "72699", priceFrom: true }),
+    ]);
+    const r = await searchProducts(CFG, { query: "termo", limit: 5 });
+    expect(r.message).toContain("Termo Premium (desde $72.699)");
+  });
+
+  it("sin precio: muestra el nombre y el link, sin '$' vacío", async () => {
+    mockByTerm.mockResolvedValueOnce([
+      product({ name: "Producto Sin Precio", price: "" }),
+    ]);
+    const r = await searchProducts(CFG, { query: "algo", limit: 5 });
+    expect(r.message).toContain("Producto Sin Precio: ");
+    expect(r.message).not.toContain("($)");
+    expect(r.message).not.toContain("$ ");
   });
 
   it("ante error de WooCommerce devuelve found:false con link a la tienda (nunca lanza)", async () => {

@@ -165,6 +165,13 @@ function sanitizeProduct(p: WooProduct): WooProduct {
   };
 }
 
+/** Formatea un precio en pesos con separador de miles (es-AR): "154599" → "$154.599". */
+function pesos(price: string): string {
+  const digits = String(price).replace(/\D/g, "");
+  if (!digits) return "";
+  return "$" + digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
 function buildMessage(
   storeUrl: string,
   products: WooProduct[],
@@ -178,17 +185,21 @@ function buildMessage(
     ? `Sí, tenemos la categoría ${category.name}: ${category.url}\nAlgunos ejemplos:\n`
     : "";
   const lines = products.map((p) => {
-    let priceTxt: string;
+    // Partes del renglón: precio (si lo hay) y "sin stock" (si aplica).
+    let priceTxt = "";
     if (p.sizes && p.sizes.length > 0) {
       const distintos = new Set(p.sizes.map((s) => s.price));
       priceTxt =
         distintos.size === 1
-          ? `$${p.sizes[0].price}, talles ${p.sizes.map((s) => s.label).join(", ")}`
-          : p.sizes.map((s) => `${s.label} $${s.price}`).join(" / ");
-    } else {
-      priceTxt = `$${p.price}`;
+          ? `${pesos(p.sizes[0].price)}, talles ${p.sizes.map((s) => s.label).join(", ")}`
+          : p.sizes.map((s) => `${s.label} ${pesos(s.price)}`).join(" / ");
+    } else if (p.price) {
+      // "desde $X" para productos variables (price = variante más barata).
+      priceTxt = p.priceFrom ? `desde ${pesos(p.price)}` : pesos(p.price);
     }
-    return `${p.name} (${priceTxt}${p.inStock ? "" : ", sin stock"}): ${p.permalink}`;
+    const parts = [priceTxt, p.inStock ? "" : "sin stock"].filter(Boolean);
+    const suffix = parts.length ? ` (${parts.join(", ")})` : "";
+    return `${p.name}${suffix}: ${p.permalink}`;
   });
   const extra = category
     ? `\nHay más en la categoría completa: ${category.url}`

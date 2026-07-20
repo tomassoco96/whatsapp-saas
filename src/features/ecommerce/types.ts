@@ -14,8 +14,13 @@ export interface WooSize {
 export interface WooProduct {
   id: number;
   name: string;
-  /** Precio base (el más bajo si es variable). */
+  /** Precio base (el más bajo si es variable). Precio de venta al público. */
   price: string;
+  /**
+   * true si `price` es el mínimo de un producto variable → se comunica como
+   * "desde $X" (no como precio único).
+   */
+  priceFrom?: boolean;
   inStock: boolean;
   permalink: string;
   shortDescription: string;
