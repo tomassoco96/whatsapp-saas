@@ -21,6 +21,24 @@ function svc() {
 
 export type Decision = "respond" | "handoff" | "abstain" | "rate_limited";
 
+/**
+ * ¿El workspace usa el handoff automático por palabra clave? Default true (no
+ * cambia el comportamiento de los que ya lo usan). Ante error de lectura, true.
+ */
+async function keywordHandoffEnabled(
+  workspaceId: string,
+  supabase: ReturnType<typeof svc>,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("workspaces")
+    .select("settings")
+    .eq("id", workspaceId)
+    .maybeSingle();
+  const v = (data?.settings as { keyword_handoff_enabled?: boolean } | null)
+    ?.keyword_handoff_enabled;
+  return v !== false;
+}
+
 export interface DecisionResult {
   decision: Decision;
   reason: string;
@@ -65,8 +83,15 @@ export async function decide(opts: {
     return { decision: "abstain", reason: `state:${currentState}` };
   }
 
-  // 3. Detect handoff trigger in message text
-  if (detectsHandoffTrigger(mergedText)) {
+  // 3. Detect handoff trigger in message text — SOLO si el workspace lo tiene
+  //    activado (workspaces.settings.keyword_handoff_enabled, default true).
+  //    El matcher es un instrumento romo: frases como "hablar con un vendedor"
+  //    son intención mayorista (no "quiero un humano"), y disparaban una pausa
+  //    automática en la que el bot ni siquiera respondía. En clientes con
+  //    derivación inteligente por tool (derivar_a_humano) conviene apagarlo y
+  //    dejar que el agente decida.
+  const keywordHandoff = await keywordHandoffEnabled(workspaceId, supabase);
+  if (keywordHandoff && detectsHandoffTrigger(mergedText)) {
     // Validate the transition is legal before applying
     if (canTransition(currentState, "handoff_pending")) {
       const { error: updateError } = await supabase
