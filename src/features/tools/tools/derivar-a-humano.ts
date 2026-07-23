@@ -37,29 +37,36 @@ const schema = z.object({
 type Args = z.infer<typeof schema>;
 
 /**
- * Deriva la conversación a un humano: pausa la IA (handoff_pending), registra el
- * caso (etiqueta + resumen + urgencia) para que aparezca en el inbox, y etiqueta
- * al contacto para que se pueda rutear/filtrar. NO le manda un WhatsApp al humano
- * (el operador toma la conversación desde el inbox de la plataforma). El aviso
- * saliente al celular del humano requeriría un template de Meta (YCloud) — es un
- * agregado aparte.
+ * Deriva la conversación a un humano: registra el caso (etiqueta + resumen +
+ * urgencia) para que aparezca en el inbox, y etiqueta al contacto para rutear.
+ *
+ * Pausa la IA SOLO en casos URGENTES (riesgo/lesión/legal): ahí un humano tiene
+ * que tomar la conversación de inmediato y el bot no debe seguir chateando. En
+ * casos NO urgentes (garantía, reclamo, consulta minorista) la IA SIGUE
+ * respondiendo — el humano hace el seguimiento por su canal (ej. mail de
+ * posventa) o toma la conversación a mano desde el inbox si hace falta. Así el
+ * bot no queda mudo tras tomar un reclamo (feedback 2ª ronda, item 5).
+ *
+ * NO le manda un WhatsApp al humano (el operador lo ve en el inbox). El aviso al
+ * celular del humano requeriría un template de Meta (YCloud) — agregado aparte.
  */
 async function run(args: Args, ctx: ToolContext): Promise<ToolResult> {
   const supabase = svc();
 
   try {
-    // 1. Pausar la IA: pasar a handoff_pending SOLO si está en ai_active (el
-    //    .eq('state','ai_active') hace la transición atómica e idempotente: si ya
-    //    está en un estado humano, no la pisa).
-    await supabase
-      .from("conversations")
-      .update({
-        state: "handoff_pending",
-        ai_enabled: false,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", ctx.conversationId)
-      .eq("state", "ai_active");
+    // 1. Pausar la IA SOLO si es urgente (transición atómica e idempotente: el
+    //    .eq('state','ai_active') evita pisar un estado humano ya en curso).
+    if (args.urgente) {
+      await supabase
+        .from("conversations")
+        .update({
+          state: "handoff_pending",
+          ai_enabled: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", ctx.conversationId)
+        .eq("state", "ai_active");
+    }
 
     // 2. Registrar el handoff: surface en el inbox/dashboard + observabilidad.
     await supabase.from("events").insert({

@@ -76,19 +76,25 @@ describe("derivar_a_humano", () => {
     ]);
   });
 
-  it("caso no urgente -> evento level info", async () => {
+  it("caso NO urgente: registra y etiqueta pero NO pausa la IA (el bot sigue respondiendo)", async () => {
     h.mock.queue.push(
-      { error: null },
-      { error: null },
-      { data: { tags: [] } },
-      { error: null },
+      { error: null }, // insert event
+      { data: [] }, // select contact.tags
+      { error: null }, // update contact.tags
     );
 
-    await derivarAHumanoTool.run(
+    const res = await derivarAHumanoTool.run(
       { etiqueta: "esteban", resumen: "Garantía de un calefactor", urgente: false },
       CTX,
     );
 
+    expect(res.ok).toBe(true);
+    // Clave del fix (item 5): un caso no urgente NO toca conversations (no pausa).
+    const conv = h.mock.calls.find(
+      (c) => c.table === "conversations" && c.method === "update",
+    );
+    expect(conv).toBeUndefined();
+    // Pero sí registra el evento (level info) y etiqueta.
     const ev = h.mock.calls.find(
       (c) => c.table === "events" && c.method === "insert",
     );
@@ -96,10 +102,11 @@ describe("derivar_a_humano", () => {
   });
 
   it("no duplica una etiqueta ya presente", async () => {
+    // urgente:false → no hay update de conversations; el primer .from() es el
+    // insert del evento, el segundo el select de tags.
     h.mock.queue.push(
-      { error: null },
-      { error: null },
-      { data: { tags: ["derivar:nico"] } }, // ya tiene la etiqueta
+      { error: null }, // insert event
+      { data: { tags: ["derivar:nico"] } }, // select: ya tiene la etiqueta
     );
 
     await derivarAHumanoTool.run(
